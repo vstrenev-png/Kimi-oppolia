@@ -176,7 +176,7 @@ def estimate_room_from_image(
 ) -> Dict:
     """
     Оценява размерите на стая от снимка.
-    Ако открие маркер, го използва за калибрация.
+    Ако открие маркер, го използва за калибрация чрез пинхол камерна модел.
     Връща dict с width_cm, length_cm, height_cm, px_per_cm, confidence, note, debug.
     """
     h, w = image.shape[:2]
@@ -196,36 +196,52 @@ def estimate_room_from_image(
     debug["marker_found"] = True
     debug["method"] = marker.get("method", "unknown")
 
-    # Център на маркера в кадъра
+    if marker_type in MARKER_SIZES_CM:
+        marker_real_long = max(MARKER_SIZES_CM[marker_type]["width"], MARKER_SIZES_CM[marker_type]["height"])
+    else:
+        marker_real_long = custom_size_cm
+
+    marker_image_long = marker["long_px"]
+
+    # Пинхол модел: focal_length = image_width / (2 * tan(FOV/2))
+    # Използваме 80° FOV, защото повечето телефони имат по-широко зрително поле.
+    fov_horizontal_deg = 80.0
+    fov_rad = math.radians(fov_horizontal_deg)
+    focal_length_px = w / (2 * math.tan(fov_rad / 2))
+
+    # Разстояние до маркера
+    distance_to_marker_cm = focal_length_px * marker_real_long / marker_image_long
+
+    # Позиция на маркера в кадъра - колко е „навътре“ в стаята
     center_y = float(np.mean(bbox[:, 1]))
-    # Нормализирана позиция: 0 = долу (близо до камерата), 1 = горе (далечна стена)
-    normalized_y = center_y / h
+    normalized_y = center_y / h  # 0 = горе (далеч), 1 = долу (близо)
 
-    # Корекционен фактор за перспектива.
-    # Ако маркерът е в долната част на кадъра (под, близо до камерата),
-    # px_per_cm е завишен и трябва да увеличим размерите.
-    # Ако е в горната част (стена/далечна стена), корекцията е по-малка.
-    perspective_factor = 1.5 + normalized_y * 1.5  # варира от ~1.5 до ~3.0
+    # Предполагаме, че задната стена е на няколко пъти по-далеч от маркера.
+    # Ако маркерът е в горната част на кадъра (далеч), задната стена е малко по-далеч.
+    # Ако е в долната част (близо), задната стена е значително по-далеч.
+    depth_multiplier = 1.3 + (1 - normalized_y) * 1.2  # варира от 1.3 до 2.5
+    distance_to_far_wall_cm = min(distance_to_marker_cm * depth_multiplier, 500.0)
 
-    # Ширина на видимото поле на пода в cm, коригирана с перспектива
-    visible_floor_width_cm = (w / px_per_cm) * perspective_factor
+    # Ширина на видимото поле на задната стена
+    visible_width_cm = 2 * distance_to_far_wall_cm * math.tan(fov_rad / 2)
 
-    # Височина на стаята
-    visible_height_cm = (h / px_per_cm) * perspective_factor * 0.55
+    # Височина на видимото поле
+    aspect = h / w
+    visible_height_cm = visible_width_cm * aspect
 
-    # Дължина на стаята (дълбочина)
-    length_cm = visible_floor_width_cm * 0.95
-
-    # Ширина на стаята
-    width_cm = visible_floor_width_cm * 0.85
-
-    # Височина
-    height_cm = visible_height_cm
+    # Оценка на размерите на стаята
+    width_cm = visible_width_cm * 0.7
+    length_cm = distance_to_far_wall_cm * 0.85
+    height_cm = visible_height_cm * 0.45
 
     # Ограничения за реалистичност
-    width_cm = max(min(width_cm, 1200), 200)
-    length_cm = max(min(length_cm, 1200), 200)
-    height_cm = max(min(height_cm, 400), 220)
+    width_cm = max(min(width_cm, 800), 200)
+    length_cm = max(min(length_cm, 800), 200)
+    height_cm = max(min(height_cm, 320), 220)
+
+    debug["distance_to_marker_cm"] = round(distance_to_marker_cm, 1)
+    debug["distance_to_far_wall_cm"] = round(distance_to_far_wall_cm, 1)
+    debug["focal_length_px"] = round(focal_length_px, 1)
 
     return {
         "width_cm": round(width_cm, 1),

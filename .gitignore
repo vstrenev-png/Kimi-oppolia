@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+ai-service/venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models (large files downloaded at runtime)
+ai-service/*.pth
+ai-service/.cache/
+
+# Test output
+test-results/
+screenshots/

@@ -1,0 +1,24 @@
+{
+  "name": "design-code-website",
+  "version": "1.0.0",
+  "description": "Тази папка съдържа статичен сайт за Design-Code с нов editorial дизайн.",
+  "main": "build.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vstrenev-png/design-code-website.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/vstrenev-png/design-code-website/issues"
+  },
+  "homepage": "https://github.com/vstrenev-png/design-code-website#readme",
+  "devDependencies": {
+    "puppeteer-core": "^25.13.0"
+  }
+}

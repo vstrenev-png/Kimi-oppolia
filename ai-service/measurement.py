@@ -24,7 +24,8 @@ def detect_marker(
 ) -> Optional[Dict]:
     """
     Опитва се да открие правоъгълен маркер в снимката.
-    Връща dict с px_per_cm и bbox, или None ако не е намерен.
+    Връща dict с px_per_cm, bbox и debug информация, или None ако не е намерен.
+    Поддържа маркер както на пода, така и на стената.
     """
     if marker_type in MARKER_SIZES_CM:
         marker = MARKER_SIZES_CM[marker_type]
@@ -37,63 +38,105 @@ def detect_marker(
         expected_ratio = 1.0
 
     h, w = image.shape[:2]
+    img_area = w * h
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blurred, 50, 150)
 
-    # Намираме контурите
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    debug_info = {
+        "tried_methods": [],
+        "contours_checked": 0,
+        "candidates_count": 0,
+        "best_ratio_diff": None,
+    }
+
+    # Опитваме няколко метода за откриване на ръбове
+    edge_methods = [
+        ("canny_default", cv2.Canny(blurred, 50, 150)),
+        ("canny_low", cv2.Canny(blurred, 20, 80)),
+        ("canny_high", cv2.Canny(blurred, 100, 250)),
+    ]
+
+    # Адаптивен threshold — полезен, когато листът е по-светъл/по-тъмен от фона
+    adaptive = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 11, 2
+    )
+    edge_methods.append(("adaptive", adaptive))
 
     candidates = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < (w * h * 0.001):  # твърде малък
-            continue
-        if area > (w * h * 0.4):  # твърде голям
-            continue
+    for method_name, binary in edge_methods:
+        debug_info["tried_methods"].append(method_name)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        peri = cv2.arcLength(cnt, True)
-        if peri < 1e-6:
-            continue
+        for cnt in contours:
+            debug_info["contours_checked"] += 1
+            area = cv2.contourArea(cnt)
+            if area < (img_area * 0.0005):  # по-малък праг
+                continue
+            if area > (img_area * 0.5):  # по-висок горен праг
+                continue
 
-        approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)
-        if len(approx) != 4:
-            continue
+            peri = cv2.arcLength(cnt, True)
+            if peri < 1e-6:
+                continue
 
-        # Проверяваме дали е изпъкнал четириъгълник
-        if not cv2.isContourConvex(approx):
-            continue
+            # Позволяваме по-груба апроксимация за перспективно изкривени маркери
+            approx = cv2.approxPolyDP(cnt, 0.07 * peri, True)
+            if len(approx) < 4 or len(approx) > 6:
+                continue
 
-        pts = approx.reshape(4, 2).astype(np.float32)
-        # Изчисляваме дължините на страните
-        d = [
-            np.linalg.norm(pts[i] - pts[(i + 1) % 4])
-            for i in range(4)
-        ]
-        long = max(d[0], d[1], d[2], d[3])
-        short = min(d[0], d[1], d[2], d[3])
-        if short < 1:
-            continue
+            # Взимаме bounding quad — минимален обгръщащ четириъгълник
+            pts = approx.reshape(-1, 2).astype(np.float32)
+            if len(pts) > 4:
+                # Ако имаме повече от 4 точки, взимаме minAreaRect
+                rect = cv2.minAreaRect(pts)
+                box = cv2.boxPoints(rect)
+                pts = box.astype(np.float32)
 
-        ratio = long / short
-        # Проверяваме съотношението спрямо очакваното
-        ratio_diff = abs(ratio - expected_ratio) / max(expected_ratio, 1e-6)
-        if ratio_diff > 0.35:
-            continue
+            if not cv2.isContourConvex(pts.astype(np.int32)):
+                continue
 
-        # Изчисляваме px_per_cm по дългата страна
-        px_per_cm_long = long / max(real_height, real_width)
-        px_per_cm_short = short / min(real_height, real_width)
-        px_per_cm = (px_per_cm_long + px_per_cm_short) / 2
+            # Изчисляваме дължините на страните
+            d = [
+                np.linalg.norm(pts[i] - pts[(i + 1) % 4])
+                for i in range(4)
+            ]
+            long = max(d)
+            short = min(d)
+            if short < 1:
+                continue
 
-        candidates.append({
-            "px_per_cm": px_per_cm,
-            "ratio_diff": ratio_diff,
-            "area": area,
-            "bbox": pts,
-            "long_px": long,
-            "short_px": short,
-        })
+            ratio = long / short
+            # Проверяваме съотношението спрямо очакваното и неговото обратно
+            ratio_diff_normal = abs(ratio - expected_ratio) / max(expected_ratio, 1e-6)
+            ratio_diff_inverse = abs(ratio - (1.0 / expected_ratio)) / max(1.0 / expected_ratio, 1e-6)
+            ratio_diff = min(ratio_diff_normal, ratio_diff_inverse)
+
+            if ratio_diff > 0.55:  # по-мек праг
+                continue
+
+            # Определяме коя страна е дълга/къса спрямо реалните размери
+            if ratio > 1.0:
+                px_per_cm_long = long / max(real_height, real_width)
+                px_per_cm_short = short / min(real_height, real_width)
+            else:
+                px_per_cm_long = long / min(real_height, real_width)
+                px_per_cm_short = short / max(real_height, real_width)
+            px_per_cm = (px_per_cm_long + px_per_cm_short) / 2
+
+            candidates.append({
+                "px_per_cm": px_per_cm,
+                "ratio_diff": ratio_diff,
+                "area": area,
+                "bbox": pts,
+                "long_px": long,
+                "short_px": short,
+                "method": method_name,
+            })
+
+    debug_info["candidates_count"] = len(candidates)
+    if candidates:
+        debug_info["best_ratio_diff"] = min(c["ratio_diff"] for c in candidates)
 
     if not candidates:
         return None
@@ -106,6 +149,8 @@ def detect_marker(
         "bbox": best["bbox"],
         "long_px": best["long_px"],
         "short_px": best["short_px"],
+        "debug": debug_info,
+        "method": best["method"],
     }
 
 
@@ -132,7 +177,7 @@ def estimate_room_from_image(
     """
     Оценява размерите на стая от снимка.
     Ако открие маркер, го използва за калибрация.
-    Връща dict с width_cm, length_cm, height_cm, px_per_cm, confidence, note.
+    Връща dict с width_cm, length_cm, height_cm, px_per_cm, confidence, note, debug.
     """
     h, w = image.shape[:2]
 
@@ -141,31 +186,34 @@ def estimate_room_from_image(
 
     if marker is None:
         # Fallback: приемаме, че стаята заема целия кадър и използваме груба евристика
-        return _fallback_estimate(h, w, marker_type, custom_size_cm)
+        result = _fallback_estimate(h, w, marker_type, custom_size_cm)
+        result["debug"] = {"marker_found": False}
+        return result
 
     px_per_cm = marker["px_per_cm"]
     bbox = marker["bbox"]
+    debug = marker.get("debug", {})
+    debug["marker_found"] = True
+    debug["method"] = marker.get("method", "unknown")
 
     # Център на маркера в кадъра
     center_y = float(np.mean(bbox[:, 1]))
     # Нормализирана позиция: 0 = долу (близо до камерата), 1 = горе (далечна стена)
-    # Ако маркерът е на пода, по-близо до дъното на кадъра = по-близо до камерата.
     normalized_y = center_y / h
 
     # Корекционен фактор за перспектива.
-    # Маркерът обикновено е по-близо до камерата от задната стена.
-    # Ако е в долната част, px_per_cm е завишен (обектите изглеждат по-големи),
-    # затова увеличаваме оценените размери.
-    # Ако е в горната половина, корекцията е по-малка.
+    # Ако маркерът е в долната част на кадъра (под, близо до камерата),
+    # px_per_cm е завишен и трябва да увеличим размерите.
+    # Ако е в горната част (стена/далечна стена), корекцията е по-малка.
     perspective_factor = 1.5 + normalized_y * 1.5  # варира от ~1.5 до ~3.0
 
     # Ширина на видимото поле на пода в cm, коригирана с перспектива
     visible_floor_width_cm = (w / px_per_cm) * perspective_factor
 
-    # Височина на стаята — коригираме височината на кадъра
+    # Височина на стаята
     visible_height_cm = (h / px_per_cm) * perspective_factor * 0.55
 
-    # Дължина на стаята (дълбочина) — по-голяма от ширината, защото камерата е в ъгъл
+    # Дължина на стаята (дълбочина)
     length_cm = visible_floor_width_cm * 0.95
 
     # Ширина на стаята
@@ -188,9 +236,10 @@ def estimate_room_from_image(
         "confidence": 0.65,
         "note": (
             "Измерване с мащабен маркер. "
-            "Поставете маркерът равен на пода, близо до далечната стена, за най-добра точност. "
+            "Поставете маркерът равен на пода или стената, близо до далечната стена, за най-добра точност. "
             "Резултатът е приблизителен — проверете и коригирайте ръчно."
         ),
+        "debug": debug,
     }
 
 
@@ -233,6 +282,6 @@ def _fallback_estimate(h: int, w: int, marker_type: str, custom_size_cm: float) 
         "confidence": 0.35,
         "note": (
             "Маркерът не беше открит. Използват се фиксирани евристични стойности. "
-            "Поставете A4 лист или банкнота на пода в кадъра за по-точно измерване."
+            "Поставете A4 лист или банкнота на пода или стената в кадъра за по-точно измерване."
         ),
     }

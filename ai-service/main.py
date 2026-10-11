@@ -2,13 +2,13 @@ import base64
 import io
 import math
 import os
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from PIL import Image
 
 from measurement import estimate_room_from_image, MARKER_SIZES_CM
@@ -41,6 +41,7 @@ class AnalyzeResponse(BaseModel):
     confidence: float
     demo_model_url: Optional[str] = None
     note: str
+    debug: Optional[Dict[str, Any]] = Field(default=None, description="Debug информация за marker detection")
 
 
 def decode_image(b64_string: str) -> np.ndarray:

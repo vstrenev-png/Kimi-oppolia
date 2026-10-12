@@ -5,6 +5,9 @@ opencv-python-headless==4.8.1.78
 numpy<2
 Pillow>=10.2.0
 
+# OpenAI Vision API за AI измерване
+openai>=1.30.0
+
 # Опционални — за реални AI модели (SAM + Depth)
 # torch>=2.1.0
 # torchvision>=0.16.0

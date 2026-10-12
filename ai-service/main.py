@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from PIL import Image
 
 from measurement import estimate_room_from_image, MARKER_SIZES_CM
+from vision_api import estimate_with_openai_vision
 
 
 app = FastAPI(title="Design-Code AI Measurement Service")
@@ -53,8 +54,16 @@ def decode_image(b64_string: str) -> np.ndarray:
         raise HTTPException(status_code=400, detail=f"Invalid image: {exc}") from exc
 
 
+def sanitize_base64(b64_string: str) -> str:
+    """Премахва евентуален data URI prefix от base64 низа."""
+    if "," in b64_string:
+        return b64_string.split(",", 1)[1]
+    return b64_string
+
+
 def estimate_room_dimensions(
     image: np.ndarray,
+    base64_image: str,
     marker_type: str,
     custom_size_cm: float,
     use_ai: bool = False,
@@ -63,12 +72,19 @@ def estimate_room_dimensions(
     """
     Оценява размерите на стая.
     По подразбиране използва OpenCV + маркер.
-    use_ai=True засега не е налично на този сървър и връща същия локален резултат с бележка.
+    use_ai=True използва OpenAI GPT-4o Vision, ако е наличен OPENAI_API_KEY.
     """
-    result = estimate_room_from_image(image, marker_type, custom_size_cm)
     if use_ai:
-        result["note"] += " AI моделите (depth/SAM) не са активирани на този сървър."
-    return result
+        ai_result = estimate_with_openai_vision(base64_image, marker_type, custom_size_cm)
+        if ai_result is not None:
+            ai_result["debug"] = {"source": "openai_vision"}
+            return ai_result
+        # Ако няма API ключ, падаме към локален алгоритъм с бележка
+        result = estimate_room_from_image(image, marker_type, custom_size_cm)
+        result["note"] += " OpenAI Vision API не е конфигуриран — използва се локален алгоритъм."
+        return result
+
+    return estimate_room_from_image(image, marker_type, custom_size_cm)
 
 
 @app.get("/health")
@@ -78,9 +94,11 @@ def health():
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest):
-    image = decode_image(req.image)
+    base64_image = sanitize_base64(req.image)
+    image = decode_image(base64_image)
     result = estimate_room_dimensions(
         image,
+        base64_image,
         req.marker_type,
         req.custom_size_cm,
         use_ai=req.use_ai,

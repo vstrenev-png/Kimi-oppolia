@@ -134,7 +134,10 @@ def remove_furniture(req: CleanRoomRequest):
         cleaned = generative_remove_furniture(image, boxes)
         if cleaned is not None:
             engine = "gpt-image-1"
-    except Exception:
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        print(f"[remove-furniture] gpt-image-1 fallback: {exc}", flush=True)
         cleaned = None
 
     if cleaned is None:

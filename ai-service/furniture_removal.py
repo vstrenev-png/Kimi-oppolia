@@ -150,8 +150,8 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
     new_w, new_h = int(w_img * scale), int(h_img * scale)
     pil_img = Image.fromarray(image_rgb).resize((new_w, new_h), Image.LANCZOS)
 
-    # Маска: прозрачно (alpha=0) = зона за редактиране
-    mask = Image.new("L", (new_w, new_h), 255)
+    # Маска: RGBA, alpha=0 = зона за редактиране
+    mask = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 255))
     from PIL import ImageDraw
     draw = ImageDraw.Draw(mask)
     for b in boxes:
@@ -164,11 +164,11 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
         draw.rectangle(
             [max(0, x1 - pad_x), max(0, y1 - pad_y),
              min(new_w, x2 + pad_x), min(new_h, y2 + pad_y)],
-            fill=0,
+            fill=(0, 0, 0, 0),
         )
 
     img_buf = io.BytesIO()
-    pil_img.save(img_buf, format="PNG")
+    pil_img.convert("RGBA").save(img_buf, format="PNG")
     img_buf.seek(0)
     mask_buf = io.BytesIO()
     mask.save(mask_buf, format="PNG")

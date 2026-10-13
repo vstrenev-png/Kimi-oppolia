@@ -56,45 +56,56 @@ def estimate_with_openai_vision(
     "note": "кратко обяснение"
 }}"""
 
-    client = OpenAI(api_key=api_key)
+    try:
+        client = OpenAI(api_key=api_key)
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}",
-                            "detail": "high",
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}",
+                                "detail": "high",
+                            },
                         },
-                    },
-                ],
-            }
-        ],
-        max_tokens=500,
-        temperature=0.2,
-    )
+                    ],
+                }
+            ],
+            max_tokens=500,
+            temperature=0.2,
+        )
 
-    raw = response.choices[0].message.content.strip()
+        raw = response.choices[0].message.content.strip()
 
-    # Почистваме евентуални Markdown code blocks
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.lower().startswith("json"):
-            raw = raw[4:].strip()
+        # Почистваме евентуални Markdown code blocks
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:].strip()
 
-    data = json.loads(raw)
+        data = json.loads(raw)
 
-    return {
-        "width_cm": float(data.get("width_cm", 400)),
-        "length_cm": float(data.get("length_cm", 400)),
-        "height_cm": float(data.get("height_cm", 260)),
-        "px_per_cm": float(data.get("px_per_cm", 10)),
-        "confidence": float(data.get("confidence", 0.5)),
-        "note": str(data.get("note", "AI измерване с OpenAI Vision.")),
-        "marker_label": marker_info.get(marker_type, "Ръчен маркер"),
-    }
+        return {
+            "width_cm": float(data.get("width_cm", 400)),
+            "length_cm": float(data.get("length_cm", 400)),
+            "height_cm": float(data.get("height_cm", 260)),
+            "px_per_cm": float(data.get("px_per_cm", 10)),
+            "confidence": float(data.get("confidence", 0.5)),
+            "note": str(data.get("note", "AI измерване с OpenAI Vision.")),
+            "marker_label": marker_info.get(marker_type, "Ръчен маркер"),
+        }
+    except Exception as exc:
+        return {
+            "width_cm": 400.0,
+            "length_cm": 400.0,
+            "height_cm": 260.0,
+            "px_per_cm": 0.0,
+            "confidence": 0.1,
+            "note": f"OpenAI Vision грешка: {exc}. Проверете API ключа, кредитите и интернет връзката.",
+            "marker_label": marker_info.get(marker_type, "Ръчен маркер"),
+        }

@@ -170,9 +170,11 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
     img_buf = io.BytesIO()
     pil_img.convert("RGBA").save(img_buf, format="PNG")
     img_buf.seek(0)
+    img_buf.name = "room.png"
     mask_buf = io.BytesIO()
     mask.save(mask_buf, format="PNG")
     mask_buf.seek(0)
+    mask_buf.name = "mask.png"
 
     prompt = (
         "Remove the masked furniture and objects completely. Reconstruct the empty room behind them: "

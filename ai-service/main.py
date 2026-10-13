@@ -13,6 +13,7 @@ from PIL import Image
 
 from measurement import estimate_room_from_image, MARKER_SIZES_CM
 from vision_api import estimate_with_openai_vision
+from furniture_removal import detect_furniture_boxes, inpaint_furniture, encode_image_jpeg
 
 
 app = FastAPI(title="Design-Code AI Measurement Service")
@@ -90,6 +91,45 @@ def estimate_room_dimensions(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+class CleanRoomRequest(BaseModel):
+    image: str
+
+
+class CleanRoomResponse(BaseModel):
+    cleaned_image: Optional[str] = None
+    boxes_found: int = 0
+    note: str
+
+
+@app.post("/remove-furniture", response_model=CleanRoomResponse)
+def remove_furniture(req: CleanRoomRequest):
+    base64_image = sanitize_base64(req.image)
+    image = decode_image(base64_image)
+
+    try:
+        boxes = detect_furniture_boxes(base64_image)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI откриване на мебели неуспешно: {exc}") from exc
+
+    if boxes is None:
+        raise HTTPException(status_code=503, detail="OpenAI API ключът не е конфигуриран на сървъра.")
+
+    if not boxes:
+        return CleanRoomResponse(
+            cleaned_image=encode_image_jpeg(image),
+            boxes_found=0,
+            note="Не са открити мебели за премахване.",
+        )
+
+    cleaned = inpaint_furniture(image, boxes)
+    labels = ", ".join(sorted({b["label"] for b in boxes}))
+    return CleanRoomResponse(
+        cleaned_image=encode_image_jpeg(cleaned),
+        boxes_found=len(boxes),
+        note=f"Премахнати обекти ({len(boxes)}): {labels}",
+    )
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)

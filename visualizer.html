@@ -71,7 +71,7 @@ img{display:block;max-width:100%}
 .v-canvas-wrap{position:relative;background:#050505;border:1px solid var(--line);border-radius:6px;min-height:70vh;overflow:hidden}
 #v-canvas{display:block;width:100%;height:70vh}
 .v-canvas__overlay{position:absolute;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:2rem}
-.v-canvas__overlay.has-image{justify-content:flex-end;align-items:flex-start;pointer-events:auto}
+.v-canvas__overlay.has-image{justify-content:flex-end;align-items:flex-start;pointer-events:none}
 .v-canvas__placeholder{color:var(--muted);max-width:26rem}
 .v-canvas__placeholder h3{font-family:var(--serif);font-weight:300;font-size:1.8rem;margin-bottom:.8rem;color:var(--text)}
 .v-canvas__placeholder p{font-size:.9rem;line-height:1.7}
@@ -83,7 +83,14 @@ img{display:block;max-width:100%}
 .v-results__item dt{font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:.2rem}
 .v-results__item dd{font-size:.95rem;font-weight:400}
 
-.v-uploaded-preview{position:absolute;inset:0;background-size:cover;background-position:center;opacity:.35;pointer-events:none}
+.v-uploaded-preview{position:absolute;inset:0;background-size:contain;background-repeat:no-repeat;background-position:center;background-color:#050505;opacity:0;pointer-events:none;transition:opacity .4s;z-index:2}
+.v-canvas-wrap.show-photo .v-uploaded-preview{opacity:1}
+.v-canvas__overlay{z-index:4}
+.v-results{z-index:4}
+.v-view-toggle{position:absolute;top:1rem;right:1rem;z-index:5;background:rgba(10,10,10,.85);border:1px solid var(--line);color:var(--text);padding:.55rem .9rem;font-size:.62rem;letter-spacing:.15em;text-transform:uppercase;border-radius:3px;cursor:pointer;transition:border-color .3s;display:none}
+.v-view-toggle:hover{border-color:var(--accent)}
+.v-btn--outline{background:transparent;border:1px solid var(--accent);color:var(--accent);margin-top:.6rem}
+.v-btn--outline:hover{background:rgba(141,198,63,.1)}
 
 .v-loader{position:absolute;inset:0;background:rgba(10,10,10,.85);display:none;flex-direction:column;justify-content:center;align-items:center;z-index:10}
 .v-loader.active{display:flex}
@@ -162,6 +169,7 @@ img{display:block;max-width:100%}
         <h3>Измери и визуализирай</h3>
         <p>Системата ще изчисли размерите и ще генерира 3D сцена. Можеш да добавиш мебели от каталога.</p>
         <button class="v-btn" id="analyzeBtn" disabled>Анализирай снимката</button>
+        <button class="v-btn v-btn--outline" id="cleanRoomBtn" disabled>Изчисти мебелите (AI)</button>
       </div>
 
       <div class="v-step">
@@ -186,14 +194,16 @@ img{display:block;max-width:100%}
       <div class="v-step">
         <div class="v-step__num">05</div>
         <h3>Каталог мебели</h3>
-        <p>Избери демо модел, за да видиш как се позиционира в стаята.</p>
+        <p>Избери мебел, за да видиш как се позиционира в стаята. Размерите са в cm.</p>
         <div class="v-field">
           <label for="modelSelect">Модел</label>
           <select id="modelSelect">
             <option value="">— без модел —</option>
-            <option value="https://threejs.org/examples/models/gltf/Parrot.glb">Демо: Папагал</option>
-            <option value="https://threejs.org/examples/models/gltf/Flamingo.glb">Демо: Фламинго</option>
-            <option value="https://threejs.org/examples/models/gltf/LittlestTokyo.glb">Демо: Littlest Tokyo</option>
+            <option value="wardrobe">Гардероб (120 × 200 × 60)</option>
+            <option value="bed">Легло (160 × 200)</option>
+            <option value="kitchen">Кухненски блок (240 × 90 × 60)</option>
+            <option value="tvstand">ТВ шкаф (180 × 45 × 40)</option>
+            <option value="desk">Бюро (140 × 74 × 70)</option>
           </select>
         </div>
         <button class="v-btn" id="addModelBtn">Добави модел</button>
@@ -210,6 +220,7 @@ img{display:block;max-width:100%}
     <div class="v-canvas-wrap" id="canvasWrap">
       <div class="v-uploaded-preview" id="uploadedPreview"></div>
       <canvas id="v-canvas"></canvas>
+      <button class="v-view-toggle" id="viewToggle">Снимка</button>
       <div class="v-canvas__overlay" id="canvasOverlay">
         <div class="v-canvas__placeholder">
           <h3>Все още няма снимка</h3>
@@ -249,7 +260,6 @@ img{display:block;max-width:100%}
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const canvas = document.getElementById('v-canvas');
 const overlay = document.getElementById('canvasOverlay');
@@ -371,20 +381,64 @@ function updateRoomFromMeasurements(w, h, d) {
   controls.update();
 }
 
-function loadGlbModel(url, x = 0, z = 0) {
+function buildFurniture(type) {
+  const group = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({ color: 0x8a6a45, roughness: 0.7, metalness: 0.05 });
+  const woodLight = new THREE.MeshStandardMaterial({ color: 0xc9b18c, roughness: 0.8, metalness: 0.02 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.4, metalness: 0.4 });
+  const white = new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.6 });
+
+  const box = (w, h, d, mat, x = 0, y = 0, z = 0) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.position.set(x, y + h / 2, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    return mesh;
+  };
+
+  switch (type) {
+    case 'wardrobe':
+      box(120, 200, 58, wood);
+      box(56, 192, 2, woodLight, -28, 4, 29);
+      box(56, 192, 2, woodLight, 28, 4, 29);
+      break;
+    case 'bed':
+      box(160, 35, 200, wood);
+      box(156, 18, 196, white, 0, 35, 0);
+      box(160, 90, 8, wood, 0, 0, -96);
+      box(50, 12, 30, white, -40, 53, -80);
+      box(50, 12, 30, white, 40, 53, -80);
+      break;
+    case 'kitchen':
+      box(240, 88, 60, wood);
+      box(244, 4, 64, white, 0, 88, 0);
+      box(60, 200, 60, woodLight, 155, 0, 0);
+      box(50, 60, 50, dark, -60, 92, 0);
+      break;
+    case 'tvstand':
+      box(180, 45, 40, wood);
+      box(120, 68, 4, dark, 0, 62, -14);
+      box(30, 17, 10, dark, 0, 45, -10);
+      break;
+    case 'desk':
+      box(140, 4, 70, woodLight, 0, 70, 0);
+      box(4, 70, 66, wood, -66, 0, 0);
+      box(4, 70, 66, wood, 66, 0, 0);
+      box(40, 40, 30, dark, 30, 74, -10);
+      break;
+  }
+  return group;
+}
+
+function placeFurniture(type) {
   if (currentModel) {
     scene.remove(currentModel);
     currentModel.traverse(c => { if (c.isMesh) { c.geometry.dispose(); if (c.material.dispose) c.material.dispose(); } });
+    currentModel = null;
   }
-  const loader = new GLTFLoader();
-  loader.load(url, gltf => {
-    currentModel = gltf.scene;
-    currentModel.position.set(x, 0, z);
-    currentModel.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
-    scene.add(currentModel);
-  }, undefined, err => {
-    console.error('GLB error:', err);
-  });
+  currentModel = buildFurniture(type);
+  scene.add(currentModel);
 }
 
 function animate() {
@@ -456,6 +510,27 @@ document.getElementById('btnCamera').addEventListener('click', e => {
 });
 
 let uploadedImageData = null;
+const canvasWrap = document.getElementById('canvasWrap');
+const viewToggle = document.getElementById('viewToggle');
+const cleanRoomBtn = document.getElementById('cleanRoomBtn');
+
+viewToggle.addEventListener('click', () => {
+  canvasWrap.classList.toggle('show-photo');
+  viewToggle.textContent = canvasWrap.classList.contains('show-photo') ? '3D сцена' : 'Снимка';
+});
+
+async function fetchWithRetry(url, options, retries = 1) {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    if (retries > 0) {
+      debug('сървърът не отговори — опитвам отново след 5 сек...');
+      await new Promise(r => setTimeout(r, 5000));
+      return fetchWithRetry(url, options, retries - 1);
+    }
+    throw err;
+  }
+}
 
 function handleFile(file) {
   debug('handleFile called: ' + (file ? file.name + ' type=' + file.type + ' size=' + file.size : 'no file'));
@@ -475,6 +550,9 @@ function handleFile(file) {
     uploadedImageData = e.target.result;
     debug('снимката е прочетена: ' + uploadedImageData.length + ' chars', 'ok');
     preview.style.backgroundImage = `url(${uploadedImageData})`;
+    canvasWrap.classList.add('show-photo');
+    viewToggle.style.display = 'block';
+    viewToggle.textContent = '3D сцена';
     overlay.innerHTML = `
       <div style="background:rgba(10,10,10,.75);padding:.8rem 1rem;border-radius:4px;border:1px solid var(--line)">
         <div style="font-size:.65rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin-bottom:.3rem">Снимката е заредена</div>
@@ -482,6 +560,7 @@ function handleFile(file) {
       </div>`;
     overlay.classList.add('has-image');
     analyzeBtn.disabled = false;
+    cleanRoomBtn.disabled = false;
     document.getElementById('dropText').innerHTML = 'Снимката е готова<br>натисни „Анализирай снимката“';
   };
   reader.readAsDataURL(file);
@@ -507,7 +586,7 @@ analyzeBtn.addEventListener('click', async () => {
       depth_model: 'Intel/midas-small'
     };
 
-    const res = await fetch(`${window.DC_CONFIG.AI_API_URL}/analyze`, {
+    const res = await fetchWithRetry(`${window.DC_CONFIG.AI_API_URL}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -522,12 +601,12 @@ analyzeBtn.addEventListener('click', async () => {
     document.getElementById('resScale').textContent = data.px_per_cm ? data.px_per_cm.toFixed(2) + ' px/cm' : '—';
     resultsPanel.classList.add('active');
 
+    if (data.note) debug('AI: ' + data.note);
+
     if (data.width_cm && data.height_cm && data.length_cm) {
       updateRoomFromMeasurements(data.width_cm, data.height_cm, data.length_cm);
-    }
-
-    if (data.demo_model_url) {
-      loadGlbModel(data.demo_model_url, 0, 0);
+      canvasWrap.classList.remove('show-photo');
+      viewToggle.textContent = 'Снимка';
     }
 
     // Попълваме ръчните полета с измерените стойности
@@ -536,9 +615,48 @@ analyzeBtn.addEventListener('click', async () => {
     document.getElementById('manualHeight').value = Math.round(data.height_cm);
   } catch (err) {
     console.error(err);
-    alert('AI услугата не е налична. Увери се, че ai-service сървърът работи на localhost:8000.');
+    debug('analyze грешка: ' + err.message, 'err');
+    alert('AI сървърът не отговори. Ако услугата току-що е стартирана, изчакай ~30 секунди и опитай отново.');
   } finally {
     loader.classList.remove('active');
+  }
+});
+
+cleanRoomBtn.addEventListener('click', async () => {
+  if (!uploadedImageData) return;
+  loader.classList.add('active');
+  loader.querySelector('p').textContent = 'Изчистваме мебелите...';
+
+  try {
+    const base64 = uploadedImageData.split(',')[1];
+    const res = await fetchWithRetry(`${window.DC_CONFIG.AI_API_URL}/remove-furniture`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: base64 })
+    });
+
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(detail || 'clean failed');
+    }
+    const data = await res.json();
+
+    if (data.cleaned_image) {
+      uploadedImageData = 'data:image/jpeg;base64,' + data.cleaned_image;
+      preview.style.backgroundImage = `url(${uploadedImageData})`;
+      canvasWrap.classList.add('show-photo');
+      viewToggle.textContent = '3D сцена';
+      debug('изчистване: ' + data.note, 'ok');
+    } else {
+      debug('изчистване: ' + (data.note || 'няма резултат'), 'err');
+    }
+  } catch (err) {
+    console.error(err);
+    debug('изчистване грешка: ' + err.message, 'err');
+    alert('AI изчистването не успя. Изчакай ~30 секунди и опитай отново.');
+  } finally {
+    loader.classList.remove('active');
+    loader.querySelector('p').textContent = 'Анализираме снимката...';
   }
 });
 
@@ -554,9 +672,12 @@ document.getElementById('applyManualBtn').addEventListener('click', () => {
 });
 
 document.getElementById('addModelBtn').addEventListener('click', () => {
-  const url = document.getElementById('modelSelect').value;
-  if (!url) return;
-  loadGlbModel(url, 0, 0);
+  const type = document.getElementById('modelSelect').value;
+  if (!type) return;
+  placeFurniture(type);
+  canvasWrap.classList.remove('show-photo');
+  viewToggle.textContent = 'Снимка';
+  debug('добавен модел: ' + type, 'ok');
 });
 
 document.getElementById('exportBtn').addEventListener('click', () => {

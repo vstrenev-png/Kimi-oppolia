@@ -17,6 +17,7 @@ from furniture_removal import (
     detect_furniture_boxes,
     inpaint_furniture,
     generative_remove_furniture,
+    composite_with_original,
     encode_image_jpeg,
 )
 
@@ -132,9 +133,12 @@ def remove_furniture(req: CleanRoomRequest):
     cleaned = None
     gen_error = ""
     try:
-        cleaned = generative_remove_furniture(image, boxes)
-        if cleaned is not None:
-            engine = "gpt-image-1"
+        generated = generative_remove_furniture(image, boxes)
+        if generated is not None:
+            # AI променя само маскираните зони; всичко останало остава
+            # пиксел-по-пиксел от оригиналната снимка (врати, прозорци, стени)
+            cleaned = composite_with_original(image, generated, boxes)
+            engine = "gpt-image-1+composite"
     except Exception as exc:
         import traceback
         traceback.print_exc()

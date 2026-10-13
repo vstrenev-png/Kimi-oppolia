@@ -96,21 +96,35 @@ def detect_furniture_boxes(base64_image: str) -> Optional[List[Dict]]:
     return valid
 
 
+def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.05) -> np.ndarray:
+    """uint8 маска (255 = зона за заличаване) от нормализирани bounding boxes."""
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for b in boxes:
+        x1 = int(b["x"] * w)
+        y1 = int(b["y"] * h)
+        x2 = int((b["x"] + b["w"]) * w)
+        y2 = int((b["y"] + b["h"]) * h)
+        pad_x = int(pad_frac * w)
+        pad_y = int(pad_frac * h)
+        # Ако кутията е близо до ръба, разширяваме до самия ръб
+        if b["x"] + b["w"] > 0.80:
+            x2 = w
+        if b["y"] + b["h"] > 0.80:
+            y2 = h
+        if b["x"] < 0.20:
+            x1 = 0
+        if b["y"] < 0.20:
+            y1 = 0
+        x1 = max(0, x1 - pad_x); y1 = max(0, y1 - pad_y)
+        x2 = min(w, x2 + pad_x); y2 = min(h, y2 + pad_y)
+        mask[y1:y2, x1:x2] = 255
+    return mask
+
+
 def inpaint_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> np.ndarray:
     """Заличава маркираните зони чрез OpenCV inpainting."""
     h_img, w_img = image_rgb.shape[:2]
-    mask = np.zeros((h_img, w_img), dtype=np.uint8)
-
-    for b in boxes:
-        x1 = int(b["x"] * w_img)
-        y1 = int(b["y"] * h_img)
-        x2 = int((b["x"] + b["w"]) * w_img)
-        y2 = int((b["y"] + b["h"]) * h_img)
-        pad_x = int(0.02 * w_img)
-        pad_y = int(0.02 * h_img)
-        x1 = max(0, x1 - pad_x); y1 = max(0, y1 - pad_y)
-        x2 = min(w_img, x2 + pad_x); y2 = min(h_img, y2 + pad_y)
-        mask[y1:y2, x1:x2] = 255
+    mask = _boxes_to_mask(boxes, w_img, h_img, pad_frac=0.02)
 
     if not np.any(mask):
         return image_rgb
@@ -121,6 +135,30 @@ def inpaint_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> np.ndarray:
     bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
     cleaned = cv2.inpaint(bgr, mask, inpaintRadius=15, flags=cv2.INPAINT_NS)
     return cv2.cvtColor(cleaned, cv2.COLOR_BGR2RGB)
+
+
+def composite_with_original(
+    original_rgb: np.ndarray,
+    generated_rgb: np.ndarray,
+    boxes: List[Dict],
+) -> np.ndarray:
+    """
+    Връща оригиналните пиксели навсякъде ИЗВЪН маскираните зони.
+    AI резултатът се използва само там, където е имало мебели —
+    врати, прозорци, стени и всичко останало остава от оригиналната снимка.
+    """
+    h, w = original_rgb.shape[:2]
+    gen = cv2.resize(generated_rgb, (w, h), interpolation=cv2.INTER_LANCZOS4)
+    mask = _boxes_to_mask(boxes, w, h)
+    # Мека граница само в тясна ивица (~±6px) около маската
+    soft = cv2.GaussianBlur(mask, (13, 13), 0).astype(np.float32) / 255.0
+    soft3 = soft[..., None]
+    blended = gen * soft3 + original_rgb * (1.0 - soft3)
+    out = np.clip(np.round(blended), 0, 255).astype(np.uint8)
+    # Гаранция: пикселите далеч от маската са пиксел-по-пиксел оригинални
+    unchanged = soft < 0.01
+    out[unchanged] = original_rgb[unchanged]
+    return out
 
 
 def encode_image_jpeg(image_rgb: np.ndarray, quality: int = 85) -> str:
@@ -151,30 +189,10 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
     pil_img = Image.fromarray(image_rgb).resize((new_w, new_h), Image.LANCZOS)
 
     # Маска: RGBA, alpha=0 = зона за редактиране
-    mask = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 255))
-    from PIL import ImageDraw
-    draw = ImageDraw.Draw(mask)
-    for b in boxes:
-        x1 = int(b["x"] * new_w)
-        y1 = int(b["y"] * new_h)
-        x2 = int((b["x"] + b["w"]) * new_w)
-        y2 = int((b["y"] + b["h"]) * new_h)
-        pad_x = int(0.05 * new_w)
-        pad_y = int(0.05 * new_h)
-        # Ако кутията е близо до ръба, разширяваме до самия ръб
-        if b["x"] + b["w"] > 0.80:
-            x2 = new_w
-        if b["y"] + b["h"] > 0.80:
-            y2 = new_h
-        if b["x"] < 0.20:
-            x1 = 0
-        if b["y"] < 0.20:
-            y1 = 0
-        draw.rectangle(
-            [max(0, x1 - pad_x), max(0, y1 - pad_y),
-             min(new_w, x2 + pad_x), min(new_h, y2 + pad_y)],
-            fill=(0, 0, 0, 0),
-        )
+    mask_np = _boxes_to_mask(boxes, new_w, new_h)
+    mask_arr = np.zeros((new_h, new_w, 4), dtype=np.uint8)
+    mask_arr[..., 3] = 255 - mask_np
+    mask = Image.fromarray(mask_arr, "RGBA")
 
     img_buf = io.BytesIO()
     pil_img.convert("RGBA").save(img_buf, format="PNG")

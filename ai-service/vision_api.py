@@ -90,12 +90,18 @@ def estimate_with_openai_vision(
 
         data = json.loads(raw)
 
+        def _float_or(value, default):
+            try:
+                return float(value) if value is not None else float(default)
+            except (TypeError, ValueError):
+                return float(default)
+
         return {
-            "width_cm": float(data.get("width_cm", 400)),
-            "length_cm": float(data.get("length_cm", 400)),
-            "height_cm": float(data.get("height_cm", 260)),
-            "px_per_cm": float(data.get("px_per_cm", 10)),
-            "confidence": float(data.get("confidence", 0.5)),
+            "width_cm": _float_or(data.get("width_cm"), 400),
+            "length_cm": _float_or(data.get("length_cm"), 400),
+            "height_cm": _float_or(data.get("height_cm"), 260),
+            "px_per_cm": _float_or(data.get("px_per_cm"), 10),
+            "confidence": _float_or(data.get("confidence"), 0.5),
             "note": str(data.get("note", "AI измерване с OpenAI Vision.")),
             "marker_label": marker_info.get(marker_type, "Ръчен маркер"),
         }

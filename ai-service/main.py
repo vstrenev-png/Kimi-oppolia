@@ -105,8 +105,10 @@ def analyze(req: AnalyzeRequest):
         depth_model=req.depth_model,
     )
 
-    # TODO: заменете с реален URL към GLB модел от вашия каталог
-    result["demo_model_url"] = "https://threejs.org/examples/models/gltf/Parrot.glb"
+    # demo_model_url се връща само ако има избран модел от каталога
+    # Засега не добавяме автоматичен demo модел
+    if "demo_model_url" not in result:
+        result["demo_model_url"] = None
 
     return AnalyzeResponse(**result)
 

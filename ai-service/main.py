@@ -114,6 +114,14 @@ def remove_furniture(req: CleanRoomRequest):
     base64_image = sanitize_base64(req.image)
     image = decode_image(base64_image)
 
+    # Ограничаваме входа — телефонни снимки 12MP+ биха препълнили паметта
+    h, w = image.shape[:2]
+    max_side = 1600
+    if max(h, w) > max_side:
+        s = max_side / max(h, w)
+        image = cv2.resize(image, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
+        base64_image = encode_image_jpeg(image)
+
     try:
         boxes = detect_furniture_boxes(base64_image)
     except Exception as exc:

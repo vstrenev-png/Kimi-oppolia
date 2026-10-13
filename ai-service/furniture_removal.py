@@ -153,7 +153,9 @@ def composite_with_original(
     # Мека граница само в тясна ивица (~±6px) около маската
     soft = cv2.GaussianBlur(mask, (13, 13), 0).astype(np.float32) / 255.0
     soft3 = soft[..., None]
-    blended = gen * soft3 + original_rgb * (1.0 - soft3)
+    blended = np.empty_like(original_rgb, dtype=np.float32)
+    np.multiply(gen, soft3, out=blended)
+    blended += original_rgb.astype(np.float32) * (1.0 - soft3)
     out = np.clip(np.round(blended), 0, 255).astype(np.uint8)
     # Гаранция: пикселите далеч от маската са пиксел-по-пиксел оригинални
     unchanged = soft < 0.01

@@ -129,3 +129,67 @@ def encode_image_jpeg(image_rgb: np.ndarray, quality: int = 85) -> str:
     buf = io.BytesIO()
     Image.fromarray(image_rgb).save(buf, format="JPEG", quality=quality)
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Optional[np.ndarray]:
+    """
+    Генеративно премахване на мебели чрез OpenAI gpt-image-1 edit с маска.
+    Връща изчистеното изображение или None при грешка.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    from openai import OpenAI
+    from PIL import Image
+
+    h_img, w_img = image_rgb.shape[:2]
+
+    # Ограничаваме до 1024px по дългата страна за цена/скорост
+    scale = min(1.0, 1024 / max(h_img, w_img))
+    new_w, new_h = int(w_img * scale), int(h_img * scale)
+    pil_img = Image.fromarray(image_rgb).resize((new_w, new_h), Image.LANCZOS)
+
+    # Маска: прозрачно (alpha=0) = зона за редактиране
+    mask = Image.new("L", (new_w, new_h), 255)
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(mask)
+    for b in boxes:
+        x1 = int(b["x"] * new_w)
+        y1 = int(b["y"] * new_h)
+        x2 = int((b["x"] + b["w"]) * new_w)
+        y2 = int((b["y"] + b["h"]) * new_h)
+        pad_x = int(0.02 * new_w)
+        pad_y = int(0.02 * new_h)
+        draw.rectangle(
+            [max(0, x1 - pad_x), max(0, y1 - pad_y),
+             min(new_w, x2 + pad_x), min(new_h, y2 + pad_y)],
+            fill=0,
+        )
+
+    img_buf = io.BytesIO()
+    pil_img.save(img_buf, format="PNG")
+    img_buf.seek(0)
+    mask_buf = io.BytesIO()
+    mask.save(mask_buf, format="PNG")
+    mask_buf.seek(0)
+
+    prompt = (
+        "Remove the masked furniture and objects completely. Reconstruct the empty room behind them: "
+        "plain wall, floor and ceiling that match the surrounding surfaces, colors, perspective and lighting. "
+        "Keep doors, windows, curtains and radiators. Do not add any new furniture or objects."
+    )
+
+    client = OpenAI(api_key=api_key)
+    quality = os.environ.get("CLEAN_IMAGE_QUALITY", "medium")
+    result = client.images.edit(
+        model="gpt-image-1",
+        image=img_buf,
+        mask=mask_buf,
+        prompt=prompt,
+        size="1024x1024",
+        quality=quality,
+    )
+    b64_out = result.data[0].b64_json
+    cleaned = Image.open(io.BytesIO(base64.b64decode(b64_out))).convert("RGB")
+    return np.array(cleaned)

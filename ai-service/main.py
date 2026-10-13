@@ -13,7 +13,12 @@ from PIL import Image
 
 from measurement import estimate_room_from_image, MARKER_SIZES_CM
 from vision_api import estimate_with_openai_vision
-from furniture_removal import detect_furniture_boxes, inpaint_furniture, encode_image_jpeg
+from furniture_removal import (
+    detect_furniture_boxes,
+    inpaint_furniture,
+    generative_remove_furniture,
+    encode_image_jpeg,
+)
 
 
 app = FastAPI(title="Design-Code AI Measurement Service")
@@ -123,12 +128,23 @@ def remove_furniture(req: CleanRoomRequest):
             note="Не са открити мебели за премахване.",
         )
 
-    cleaned = inpaint_furniture(image, boxes)
+    engine = "opencv"
+    cleaned = None
+    try:
+        cleaned = generative_remove_furniture(image, boxes)
+        if cleaned is not None:
+            engine = "gpt-image-1"
+    except Exception:
+        cleaned = None
+
+    if cleaned is None:
+        cleaned = inpaint_furniture(image, boxes)
+
     labels = ", ".join(sorted({b["label"] for b in boxes}))
     return CleanRoomResponse(
         cleaned_image=encode_image_jpeg(cleaned),
         boxes_found=len(boxes),
-        note=f"Премахнати обекти ({len(boxes)}): {labels}",
+        note=f"Премахнати обекти ({len(boxes)}): {labels} [engine: {engine}]",
     )
 
 

@@ -130,6 +130,7 @@ def remove_furniture(req: CleanRoomRequest):
 
     engine = "opencv"
     cleaned = None
+    gen_error = ""
     try:
         cleaned = generative_remove_furniture(image, boxes)
         if cleaned is not None:
@@ -137,17 +138,20 @@ def remove_furniture(req: CleanRoomRequest):
     except Exception as exc:
         import traceback
         traceback.print_exc()
-        print(f"[remove-furniture] gpt-image-1 fallback: {exc}", flush=True)
+        gen_error = str(exc)[:200]
         cleaned = None
 
     if cleaned is None:
         cleaned = inpaint_furniture(image, boxes)
 
     labels = ", ".join(sorted({b["label"] for b in boxes}))
+    note = f"Премахнати обекти ({len(boxes)}): {labels} [engine: {engine}]"
+    if gen_error:
+        note += f" [gen err: {gen_error}]"
     return CleanRoomResponse(
         cleaned_image=encode_image_jpeg(cleaned),
         boxes_found=len(boxes),
-        note=f"Премахнати обекти ({len(boxes)}): {labels} [engine: {engine}]",
+        note=note,
     )
 
 

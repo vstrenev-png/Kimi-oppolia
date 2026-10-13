@@ -188,9 +188,37 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
     new_w, new_h = int(w_img * scale), int(h_img * scale)
     pil_img = Image.fromarray(image_rgb).resize((new_w, new_h), Image.LANCZOS)
 
-    # Маска: RGBA, alpha=0 = зона за редактиране
+    if new_w >= new_h * 1.2:
+        target_aspect, out_size = 1.5, "1536x1024"
+    elif new_h >= new_w * 1.2:
+        target_aspect, out_size = 2 / 3, "1024x1536"
+    else:
+        target_aspect, out_size = 1.0, "1024x1024"
+
+    # Подравняваме съотношението с replicate-padding, за да НЯМА деформация
+    # при връщането на резултата към оригиналния размер
+    top = bottom = left = right = 0
+    cur_aspect = new_w / new_h
+    if abs(cur_aspect - target_aspect) > 0.02:
+        arr = np.array(pil_img)
+        if cur_aspect > target_aspect:
+            target_h = int(round(new_w / target_aspect))
+            top = (target_h - new_h) // 2
+            bottom = target_h - new_h - top
+            arr = cv2.copyMakeBorder(arr, top, bottom, 0, 0, cv2.BORDER_REPLICATE)
+        else:
+            target_w = int(round(new_h * target_aspect))
+            left = (target_w - new_w) // 2
+            right = target_w - new_w - left
+            arr = cv2.copyMakeBorder(arr, 0, 0, left, right, cv2.BORDER_REPLICATE)
+        pil_img = Image.fromarray(arr)
+    pad_w, pad_h = pil_img.size
+
+    # Маска: RGBA, alpha=0 = зона за редактиране; padding зоната се пази
     mask_np = _boxes_to_mask(boxes, new_w, new_h)
-    mask_arr = np.zeros((new_h, new_w, 4), dtype=np.uint8)
+    if top or bottom or left or right:
+        mask_np = cv2.copyMakeBorder(mask_np, top, bottom, left, right, cv2.BORDER_CONSTANT, value=0)
+    mask_arr = np.zeros((pad_h, pad_w, 4), dtype=np.uint8)
     mask_arr[..., 3] = 255 - mask_np
     mask = Image.fromarray(mask_arr, "RGBA")
 
@@ -210,13 +238,6 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
         "Do not add any new furniture or objects."
     )
 
-    if new_w >= new_h * 1.2:
-        out_size = "1536x1024"
-    elif new_h >= new_w * 1.2:
-        out_size = "1024x1536"
-    else:
-        out_size = "1024x1024"
-
     client = OpenAI(api_key=api_key)
     quality = os.environ.get("CLEAN_IMAGE_QUALITY", "medium")
     result = client.images.edit(
@@ -228,5 +249,11 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
         quality=quality,
     )
     b64_out = result.data[0].b64_json
-    cleaned = Image.open(io.BytesIO(base64.b64decode(b64_out))).convert("RGB")
-    return np.array(cleaned)
+    generated = np.array(Image.open(io.BytesIO(base64.b64decode(b64_out))).convert("RGB"))
+
+    # Връщаме към подплатения размер и изрязваме padding-а —
+    # резултатът има същото съотношение като оригинала
+    generated = cv2.resize(generated, (pad_w, pad_h), interpolation=cv2.INTER_LANCZOS4)
+    if top or bottom or left or right:
+        generated = generated[top:top + new_h, left:left + new_w]
+    return generated

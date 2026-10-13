@@ -159,8 +159,17 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
         y1 = int(b["y"] * new_h)
         x2 = int((b["x"] + b["w"]) * new_w)
         y2 = int((b["y"] + b["h"]) * new_h)
-        pad_x = int(0.02 * new_w)
-        pad_y = int(0.02 * new_h)
+        pad_x = int(0.04 * new_w)
+        pad_y = int(0.04 * new_h)
+        # Ако кутията е близо до ръба, разширяваме до самия ръб
+        if b["x"] + b["w"] > 0.92:
+            x2 = new_w
+        if b["y"] + b["h"] > 0.92:
+            y2 = new_h
+        if b["x"] < 0.08:
+            x1 = 0
+        if b["y"] < 0.08:
+            y1 = 0
         draw.rectangle(
             [max(0, x1 - pad_x), max(0, y1 - pad_y),
              min(new_w, x2 + pad_x), min(new_h, y2 + pad_y)],
@@ -177,10 +186,18 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
     mask_buf.name = "mask.png"
 
     prompt = (
-        "Remove the masked furniture and objects completely. Reconstruct the empty room behind them: "
-        "plain wall, floor and ceiling that match the surrounding surfaces, colors, perspective and lighting. "
-        "Keep doors, windows, curtains and radiators. Do not add any new furniture or objects."
+        "Remove the masked furniture and objects completely, including lamps and light fixtures in the mask. "
+        "Reconstruct the empty room behind them: plain wall, floor and ceiling that match the surrounding "
+        "surfaces, colors, perspective and lighting. Keep doors, windows, curtains and radiators. "
+        "Do not add any new furniture or objects."
     )
+
+    if new_w >= new_h * 1.2:
+        out_size = "1536x1024"
+    elif new_h >= new_w * 1.2:
+        out_size = "1024x1536"
+    else:
+        out_size = "1024x1024"
 
     client = OpenAI(api_key=api_key)
     quality = os.environ.get("CLEAN_IMAGE_QUALITY", "medium")
@@ -189,7 +206,7 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
         image=img_buf,
         mask=mask_buf,
         prompt=prompt,
-        size="1024x1024",
+        size=out_size,
         quality=quality,
     )
     b64_out = result.data[0].b64_json

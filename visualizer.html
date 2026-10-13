@@ -532,7 +532,33 @@ async function fetchWithRetry(url, options, retries = 1) {
   }
 }
 
-function handleFile(file) {
+function readExifOrientation(buffer) {
+  const view = new DataView(buffer);
+  if (view.byteLength < 4 || view.getUint16(0) !== 0xFFD8) return 1;
+  let offset = 2;
+  while (offset + 4 <= view.byteLength) {
+    const marker = view.getUint16(offset);
+    if (marker === 0xFFE1) {
+      if (view.getUint32(offset + 4) !== 0x45786966) return 1; // "Exif"
+      const tiff = offset + 10;
+      const little = view.getUint16(tiff) === 0x4949;
+      const ifd = tiff + view.getUint32(tiff + 4, little);
+      const entries = view.getUint16(ifd, little);
+      for (let i = 0; i < entries; i++) {
+        const entry = ifd + 2 + i * 12;
+        if (view.getUint16(entry, little) === 0x0112) {
+          return view.getUint16(entry + 8, little);
+        }
+      }
+      return 1;
+    }
+    if ((marker & 0xFF00) !== 0xFF00 || marker === 0xFFDA) break;
+    offset += 2 + view.getUint16(offset + 2);
+  }
+  return 1;
+}
+
+async function handleFile(file) {
   debug('handleFile called: ' + (file ? file.name + ' type=' + file.type + ' size=' + file.size : 'no file'));
   if (!file) {
     debug('Няма избран файл', 'err');
@@ -542,45 +568,79 @@ function handleFile(file) {
     debug('Файлът не е изображение: ' + file.type, 'err');
     return;
   }
-  const reader = new FileReader();
-  reader.onerror = err => {
-    debug('FileReader грешка: ' + (err && err.message ? err.message : 'unknown'), 'err');
-  };
-  reader.onload = e => {
-    const rawData = e.target.result;
-    const img = new Image();
-    img.onload = () => {
-      const maxSide = 1920;
-      let w = img.width, h = img.height;
-      if (Math.max(w, h) > maxSide) {
-        const s = maxSide / Math.max(w, h);
-        w = Math.round(w * s);
-        h = Math.round(h * s);
-      }
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      c.getContext('2d').drawImage(img, 0, 0, w, h);
-      uploadedImageData = c.toDataURL('image/jpeg', 0.85);
-      debug(`снимката е прочетена и мащабирана: ${w}x${h}, ${uploadedImageData.length} chars`, 'ok');
-      preview.style.backgroundImage = `url(${uploadedImageData})`;
-      canvasWrap.classList.add('show-photo');
-      viewToggle.style.display = 'block';
-      viewToggle.textContent = '3D сцена';
-      overlay.innerHTML = `
-        <div style="background:rgba(10,10,10,.75);padding:.8rem 1rem;border-radius:4px;border:1px solid var(--line)">
-          <div style="font-size:.65rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin-bottom:.3rem">Снимката е заредена</div>
-          <div style="font-size:.8rem;color:var(--muted)">${file.name} (${(file.size/1024/1024).toFixed(2)} MB)</div>
-        </div>`;
-      overlay.classList.add('has-image');
-      analyzeBtn.disabled = false;
-      cleanRoomBtn.disabled = false;
-      document.getElementById('dropText').innerHTML = 'Снимката е готова<br>натисни „Анализирай снимката“';
-    };
-    img.onerror = () => debug('грешка при декодиране на изображението', 'err');
-    img.src = rawData;
-  };
-  reader.readAsDataURL(file);
+  try {
+    const buffer = await file.arrayBuffer();
+    const orientation = readExifOrientation(buffer);
+    debug('EXIF ориентация: ' + orientation);
+
+    // Сурови пиксели без авто-EXIF (createImageBitmap 'none'); fallback: Image елемент
+    let source, srcW0, srcH0;
+    try {
+      source = await createImageBitmap(new Blob([buffer], { type: file.type }), { imageOrientation: 'none' });
+      srcW0 = source.width;
+      srcH0 = source.height;
+    } catch {
+      source = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = () => reject(new Error('decode failed'));
+        i.src = URL.createObjectURL(new Blob([buffer], { type: file.type }));
+      });
+      srcW0 = source.width;
+      srcH0 = source.height;
+    }
+
+    // Ширина/височина след прилагане на ориентацията
+    const rotated = orientation >= 5 && orientation <= 8;
+    let srcW = rotated ? srcH0 : srcW0;
+    let srcH = rotated ? srcW0 : srcH0;
+
+    const maxSide = 1920;
+    let w = srcW, h = srcH;
+    if (Math.max(w, h) > maxSide) {
+      const s = maxSide / Math.max(w, h);
+      w = Math.round(w * s);
+      h = Math.round(h * s);
+    }
+
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    const sc = w / srcW; // равномерен мащаб
+    ctx.scale(sc, sc);
+    // Прилагаме EXIF трансформация ръчно — drawImage не винаги я прилага
+    switch (orientation) {
+      case 2: ctx.transform(-1, 0, 0, 1, srcW, 0); break;
+      case 3: ctx.transform(-1, 0, 0, -1, srcW, srcH); break;
+      case 4: ctx.transform(1, 0, 0, -1, 0, srcH); break;
+      case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+      case 6: ctx.transform(0, 1, -1, 0, srcH, 0); break;
+      case 7: ctx.transform(0, -1, -1, 0, srcH, srcW); break;
+      case 8: ctx.transform(0, -1, 1, 0, 0, srcW); break;
+    }
+    ctx.drawImage(source, 0, 0);
+    if (source.src) URL.revokeObjectURL(source.src);
+    if (source.close) source.close();
+
+    uploadedImageData = c.toDataURL('image/jpeg', 0.85);
+    debug(`снимката е обработена: ${w}x${h}, ${uploadedImageData.length} chars`, 'ok');
+    preview.style.backgroundImage = `url(${uploadedImageData})`;
+    canvasWrap.classList.add('show-photo');
+    viewToggle.style.display = 'block';
+    viewToggle.textContent = '3D сцена';
+    overlay.innerHTML = `
+      <div style="background:rgba(10,10,10,.75);padding:.8rem 1rem;border-radius:4px;border:1px solid var(--line)">
+        <div style="font-size:.65rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin-bottom:.3rem">Снимката е заредена</div>
+        <div style="font-size:.8rem;color:var(--muted)">${file.name} (${(file.size/1024/1024).toFixed(2)} MB)</div>
+      </div>`;
+    overlay.classList.add('has-image');
+    analyzeBtn.disabled = false;
+    cleanRoomBtn.disabled = false;
+    document.getElementById('dropText').innerHTML = 'Снимката е готова<br>натисни „Анализирай снимката“';
+  } catch (err) {
+    debug('грешка при обработка: ' + err.message, 'err');
+  }
 }
 
 const markerType = document.getElementById('markerType');

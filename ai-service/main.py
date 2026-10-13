@@ -54,8 +54,10 @@ class AnalyzeResponse(BaseModel):
 
 def decode_image(b64_string: str) -> np.ndarray:
     try:
+        from PIL import ImageOps
         img_bytes = base64.b64decode(b64_string)
-        image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        image = Image.open(io.BytesIO(img_bytes))
+        image = ImageOps.exif_transpose(image).convert("RGB")
         return np.array(image)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid image: {exc}") from exc

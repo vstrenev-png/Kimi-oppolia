@@ -159,16 +159,16 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
         y1 = int(b["y"] * new_h)
         x2 = int((b["x"] + b["w"]) * new_w)
         y2 = int((b["y"] + b["h"]) * new_h)
-        pad_x = int(0.04 * new_w)
-        pad_y = int(0.04 * new_h)
+        pad_x = int(0.05 * new_w)
+        pad_y = int(0.05 * new_h)
         # Ако кутията е близо до ръба, разширяваме до самия ръб
-        if b["x"] + b["w"] > 0.92:
+        if b["x"] + b["w"] > 0.80:
             x2 = new_w
-        if b["y"] + b["h"] > 0.92:
+        if b["y"] + b["h"] > 0.80:
             y2 = new_h
-        if b["x"] < 0.08:
+        if b["x"] < 0.20:
             x1 = 0
-        if b["y"] < 0.08:
+        if b["y"] < 0.20:
             y1 = 0
         draw.rectangle(
             [max(0, x1 - pad_x), max(0, y1 - pad_y),

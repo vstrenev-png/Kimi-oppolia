@@ -702,7 +702,7 @@ analyzeBtn.addEventListener('click', async () => {
 cleanRoomBtn.addEventListener('click', async () => {
   if (!uploadedImageData) return;
   loader.classList.add('active');
-  loader.querySelector('p').textContent = 'Изчистваме мебелите...';
+  loader.querySelector('p').textContent = 'Изчистваме мебелите... (1-2 мин)';
 
   try {
     const base64 = uploadedImageData.split(',')[1];

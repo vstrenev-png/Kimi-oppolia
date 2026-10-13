@@ -158,6 +158,20 @@ def remove_furniture(req: CleanRoomRequest):
     if cleaned is None:
         cleaned = inpaint_furniture(image, boxes)
 
+    # Втори pass: дочистване на пропуснати мебели върху изчистеното изображение
+    if "+" in engine:
+        try:
+            leftover = detect_furniture_boxes(encode_image_jpeg(cleaned))
+            if leftover:
+                generated2 = generative_remove_furniture(cleaned, leftover)
+                if generated2 is not None:
+                    cleaned = composite_with_original(cleaned, generated2, leftover)
+                    boxes = boxes + leftover
+                    engine += ", 2pass"
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
     labels = ", ".join(sorted({b["label"] for b in boxes}))
     note = f"Премахнати обекти ({len(boxes)}): {labels} [engine: {engine}]"
     if gen_error:

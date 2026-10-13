@@ -29,20 +29,22 @@ def detect_furniture_boxes(base64_image: str) -> Optional[List[Dict]]:
     prompt = """Ти си система за компютърно зрение. Задачата ти е да откриеш ВСИЧКИ мебели и предмети в стаята, които трябва да бъдат премахнати, за да остане празно помещение.
 
 ПРЕМАХВАЙ (маркирай с box):
-- мебели: шкафове, гардероби, комоди, легла, дивани, маси, столове, рафтове, ТВ шкафове
+- мебели: шкафове, гардероби, комоди, скринове, легла, дивани, маси, столове, рафтове, ТВ шкафове
 - техника: телевизори, монитори, лаптопи, лампи
-- декорации и дребни предмети върху мебели и по стените: картини, постери, растения, играчки, кутии
+- предмети, подпрени на стени: дъски, плоскости, панели, огледала
+- помощни средства и инструменти: проходилки, стълби, сгъваеми столове
+- декорации и дребни предмети върху мебели и по стените: картини, постери, растения, играчки, кутии, бутилки
 
 НЕ МАРКИРАЙ (това е част от празната стая):
 - стени, под, таван
-- врати и каси на врати
+- врати и каси на врати — НЕ покривай нито сантиметър от врата или касата!
 - прозорци и пердета
 - радиатори, контакти, ключове
 
 За всяка мебел/предмет върни bounding box в НОРМАЛИЗИРАНИ координати (0.0 до 1.0):
 - x, y = горен ляв ъгъл (като дял от ширината/височината на снимката)
 - w, h = ширина и височина на кутията (като дял)
-Кутията трябва да покрива ЦЕЛИЯ предмет, включително краката/основата му, с малък запас.
+Кутията трябва да покрива ЦЕЛИЯ предмет плътно — от краката до върха, но БЕЗ да застъпва врати, прозорци и радиатори.
 
 Върни САМО валиден JSON, без Markdown и обяснения:
 {"boxes": [{"label": "tv", "x": 0.05, "y": 0.30, "w": 0.30, "h": 0.25}, ...]}
@@ -234,10 +236,10 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
     mask_buf.name = "mask.png"
 
     prompt = (
-        "Remove the masked furniture and objects completely, including lamps and light fixtures in the mask. "
-        "Reconstruct the empty room behind them: plain wall, floor and ceiling that match the surrounding "
-        "surfaces, colors, perspective and lighting. Keep doors, windows, curtains and radiators. "
-        "Do not add any new furniture or objects."
+        "Fill the masked areas by continuing the surrounding plain wall, floor or ceiling surface. "
+        "STRICTLY FORBIDDEN: do not create windows, doors, radiators, curtains, furniture, decorations "
+        "or any new features in the masked areas — only flat, empty wall/floor/ceiling matching the "
+        "surrounding color, texture, perspective and lighting."
     )
 
     client = OpenAI(api_key=api_key)

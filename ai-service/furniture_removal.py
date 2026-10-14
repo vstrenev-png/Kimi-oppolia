@@ -350,3 +350,140 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict], protec
     if top or bottom or left or right:
         generated = generated[top:top + new_h, left:left + new_w]
     return generated
+
+
+def _prepare_for_edit(image_rgb: np.ndarray):
+    """Resize до 1024 + replicate-padding към поддържано съотношение."""
+    from PIL import Image
+    h_img, w_img = image_rgb.shape[:2]
+    scale = min(1.0, 1024 / max(h_img, w_img))
+    new_w, new_h = int(w_img * scale), int(h_img * scale)
+    pil_img = Image.fromarray(image_rgb).resize((new_w, new_h), Image.LANCZOS)
+
+    if new_w >= new_h * 1.2:
+        target_aspect, out_size = 1.5, "1536x1024"
+    elif new_h >= new_w * 1.2:
+        target_aspect, out_size = 2 / 3, "1024x1536"
+    else:
+        target_aspect, out_size = 1.0, "1024x1024"
+
+    top = bottom = left = right = 0
+    cur_aspect = new_w / new_h
+    if abs(cur_aspect - target_aspect) > 0.02:
+        arr = np.array(pil_img)
+        if cur_aspect > target_aspect:
+            target_h = int(round(new_w / target_aspect))
+            top = (target_h - new_h) // 2
+            bottom = target_h - new_h - top
+            arr = cv2.copyMakeBorder(arr, top, bottom, 0, 0, cv2.BORDER_REPLICATE)
+        else:
+            target_w = int(round(new_h * target_aspect))
+            left = (target_w - new_w) // 2
+            right = target_w - new_w - left
+            arr = cv2.copyMakeBorder(arr, 0, 0, left, right, cv2.BORDER_REPLICATE)
+        pil_img = Image.fromarray(arr)
+    return pil_img, out_size, (top, left, new_w, new_h)
+
+
+def generative_remove_furniture_nomask(image_rgb: np.ndarray) -> Optional[np.ndarray]:
+    """
+    Пълна AI реконструкция БЕЗ маска — gpt-image-1 със стриктен prompt да
+    запази стаята идентична. Няма маскови шевове/петна, но изисква проверка.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    import io as _io
+    from openai import OpenAI
+    from PIL import Image
+
+    pil_img, out_size, (top, left, new_w, new_h) = _prepare_for_edit(image_rgb)
+    pad_w, pad_h = pil_img.size
+
+    img_buf = _io.BytesIO()
+    pil_img.convert("RGBA").save(img_buf, format="PNG")
+    img_buf.seek(0)
+    img_buf.name = "room.png"
+
+    prompt = (
+        "Remove ALL furniture and movable objects from this room photo: cabinets, wardrobes, dressers, "
+        "TVs, shelves, tables, chairs, beds, sofas, boards, panels leaning on walls, walkers, ladders, "
+        "boxes, bottles, lamps, paintings and decorations. The result must be the SAME room, empty. "
+        "Keep absolutely IDENTICAL and unchanged: the walls (exact same color, texture, corners and angles), "
+        "the floor, the ceiling, ALL doors with their exact frames, handles, locks and glass, windows with "
+        "curtains, radiators, sockets, switches, the lighting and the perspective. "
+        "Do NOT move, resize, redraw or restyle any door or window. Do NOT add anything new. "
+        "Photorealistic, identical photo style and grain."
+    )
+
+    client = OpenAI(api_key=api_key)
+    quality = os.environ.get("CLEAN_IMAGE_QUALITY", "medium")
+    result = client.images.edit(
+        model="gpt-image-1",
+        image=img_buf,
+        prompt=prompt,
+        size=out_size,
+        quality=quality,
+    )
+    b64_out = result.data[0].b64_json
+    generated = np.array(Image.open(_io.BytesIO(base64.b64decode(b64_out))).convert("RGB"))
+    generated = cv2.resize(generated, (pad_w, pad_h), interpolation=cv2.INTER_LANCZOS4)
+    if top or bottom or left or right:
+        generated = generated[top:top + new_h, left:left + new_w]
+    return generated
+
+
+def verify_cleaned_image(orig_b64: str, cleaned_b64: str) -> Optional[Dict]:
+    """
+    GPT-4o сравнява оригинала с изчистения резултат.
+    structure_ok=false ако врата/прозорец/стена/ъгъл е променен.
+    furniture_left=true ако има останали мебели.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    from openai import OpenAI
+
+    prompt = """Сравняваш две снимки на едно и също помещение: ПЪРВАТА е оригинал, ВТОРАТА е редактирана версия, от която трябва да са премахнати всички мебели.
+
+Отговори със САМО валиден JSON:
+{
+ "structure_ok": true/false,
+ "furniture_left": true/false,
+ "details": "кратко описание"
+}
+
+structure_ok = true САМО ако:
+- ВСИЧКИ врати (с рамки, каси, дръжки, стъкла) изглеждат идентично — същата позиция, форма, цвят, ширина на рамките
+- прозорци, пердета, радиатори са идентични
+- ъглите на стените и линиите под/таван са на същите места
+- няма новодобавени елементи (нови прозорци, врати, мебели)
+
+furniture_left = true ако във втората снимка остава каквато и да е мебел или предмет от първата.
+
+Бъди СТРИКТЕН: всяка видима разлика във врата, прозорец или стена означава structure_ok=false."""
+
+    client = OpenAI(api_key=api_key)
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{orig_b64}", "detail": "high"}},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{cleaned_b64}", "detail": "high"}},
+                ],
+            }
+        ],
+        max_tokens=300,
+        temperature=0,
+    )
+    raw = response.choices[0].message.content.strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+    return json.loads(raw)

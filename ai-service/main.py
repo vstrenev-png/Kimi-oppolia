@@ -17,7 +17,9 @@ from furniture_removal import (
     detect_furniture_boxes,
     inpaint_furniture,
     generative_remove_furniture,
+    generative_remove_furniture_nomask,
     composite_with_original,
+    verify_cleaned_image,
     encode_image_jpeg,
 )
 
@@ -161,24 +163,47 @@ def remove_furniture(req: CleanRoomRequest):
             note="Не са открити мебели за премахване.",
         )
 
-    engine = "opencv"
+    engine = ""
     cleaned = None
     gen_error = ""
-    try:
-        generated = generative_remove_furniture(image, boxes, protect)
-        if generated is not None:
-            # AI променя само маскираните зони; всичко останало остава
-            # пиксел-по-пиксел от оригиналната снимка (врати, прозорци, стени)
-            cleaned = composite_with_original(image, generated, boxes, protect)
-            engine = "gpt-image-1+composite"
-    except Exception as exc:
-        import traceback
-        traceback.print_exc()
-        gen_error = str(exc)[:200]
-        cleaned = None
 
+    # Стратегия 1: пълна AI реконструкция без маска + стриктна Vision проверка.
+    # Няма маскови шевове и петна; ако проверката мине — това е най-чистият резултат.
+    for attempt in range(2):
+        try:
+            candidate = generative_remove_furniture_nomask(image)
+            if candidate is None:
+                break
+            verdict = verify_cleaned_image(base64_image, encode_image_jpeg(candidate))
+            print(f"[remove-furniture] full-edit attempt {attempt + 1}: {verdict}", flush=True)
+            if verdict and verdict.get("structure_ok") and not verdict.get("furniture_left"):
+                cleaned = candidate
+                engine = "gpt-image-1-full+verified"
+                break
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            gen_error = str(exc)[:200]
+            break
+
+    # Стратегия 2 (fallback): масков pipeline с композитинг
     if cleaned is None:
-        cleaned = inpaint_furniture(image, boxes, protect)
+        engine = "opencv"
+        try:
+            generated = generative_remove_furniture(image, boxes, protect)
+            if generated is not None:
+                # AI променя само маскираните зони; всичко останало остава
+                # пиксел-по-пиксел от оригиналната снимка (врати, прозорци, стени)
+                cleaned = composite_with_original(image, generated, boxes, protect)
+                engine = "gpt-image-1+composite"
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            gen_error = (gen_error + " | " if gen_error else "") + str(exc)[:200]
+            cleaned = None
+
+        if cleaned is None:
+            cleaned = inpaint_furniture(image, boxes, protect)
 
     # Допълнителни проверителни pass-ове (макс. 3 общо): дочистване на
     # пропуснати мебели. Защитните зони се НАТРУПВАТ — врата, маркирана в

@@ -72,7 +72,7 @@ def detect_furniture_boxes(base64_image: str) -> Optional[List[Dict]]:
             }
         ],
         max_tokens=1000,
-        temperature=0.1,
+        temperature=0,
     )
 
     raw = response.choices[0].message.content.strip()
@@ -192,53 +192,55 @@ def composite_with_original(
             px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.025 * w)); py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.025 * h))
             pmask[py1:py2, px1:px2] = True
 
-    # Цветова калибрация ПО ЗОНИ с вертикален градиент: стената е по-светла
-    # надолу, затова изчисляваме отделен offset горе и долу и интерполираме.
-    # Медиана + изключени врати/други маскирани зони от извадката.
+    # Цветова калибрация ПО ЗОНИ: извадка само от ЛЯВО и ДЯСНО на зоната
+    # (същата стена, същата височина) — така подът/таванът/вратите не
+    # замърсяват медианата. Медиана е робастна на малки чужди пиксели.
     n_labels, labels = cv2.connectedComponents(mask)
     gen_f = gen.astype(np.float32)
     band = 30
     for lbl in range(1, n_labels):
         comp_mask = labels == lbl
         ys = np.where(comp_mask.any(axis=1))[0]
-        if len(ys) == 0:
+        xs = np.where(comp_mask.any(axis=0))[0]
+        if len(ys) == 0 or len(xs) == 0:
             continue
         y0, y1 = ys.min(), ys.max()
-        comp = comp_mask.astype(np.uint8) * 255
-        dil = cv2.dilate(comp, kernel, iterations=1) > 0
+        x0, x1 = xs.min(), xs.max()
 
-        def _median_diff(row_start, row_end):
-            rows = np.zeros((h, w), dtype=bool)
-            row_start = max(0, row_start); row_end = min(h, row_end)
-            if row_end <= row_start:
+        def _median_diff(col_start, col_end):
+            cols = np.zeros((h, w), dtype=bool)
+            col_start = max(0, col_start); col_end = min(w, col_end)
+            if col_end <= col_start:
                 return None
-            rows[row_start:row_end, :] = True
-            region = rows & dil & (mask == 0) & ~pmask
+            cols[y0:y1 + 1, col_start:col_end] = True
+            region = cols & (mask == 0) & ~pmask
             if region.sum() < 50:
                 return None
             return (np.median(original_rgb[region].reshape(-1, 3), axis=0)
                     - np.median(gen[region].reshape(-1, 3), axis=0))
 
-        d_top = _median_diff(y0 - band, y0)
-        d_bot = _median_diff(y1 + 1, y1 + 1 + band)
-        if d_top is None and d_bot is None:
+        d_left = _median_diff(x0 - band, x0)
+        d_right = _median_diff(x1 + 1, x1 + 1 + band)
+        if d_left is None and d_right is None:
+            # Зона до ръба — fallback: пълен пръстен без пода/тавана
+            comp = comp_mask.astype(np.uint8) * 255
+            dil = cv2.dilate(comp, kernel, iterations=1) > 0
             ring = dil & (mask == 0) & ~pmask
             if ring.sum() < 50:
                 continue
-            d_top = d_bot = (np.median(original_rgb[ring].reshape(-1, 3), axis=0)
-                             - np.median(gen[ring].reshape(-1, 3), axis=0))
-        elif d_top is None:
-            d_top = d_bot
-        elif d_bot is None:
-            d_bot = d_top
-        row_t = np.clip((np.arange(h) - y0) / max(y1 - y0, 1), 0, 1)
-        offset = d_top[None, :] * (1 - row_t[:, None]) + d_bot[None, :] * row_t[:, None]
-        rows_of_pixels = np.where(comp_mask)[0]
-        gen_f[comp_mask] += offset[rows_of_pixels]
+            offset = (np.median(original_rgb[ring].reshape(-1, 3), axis=0)
+                      - np.median(gen[ring].reshape(-1, 3), axis=0))
+        elif d_left is None:
+            offset = d_right
+        elif d_right is None:
+            offset = d_left
+        else:
+            offset = (d_left + d_right) / 2
+        gen_f[comp_mask] += offset[None, :]
     gen = np.clip(gen_f, 0, 255).astype(np.uint8)
 
-    # Меко прехвърляне (~±10px) — преходът е постепенен, без твърда граница
-    soft = cv2.GaussianBlur(mask, (0, 0), sigmaX=10).astype(np.float32) / 255.0
+    # Меко прехвърляне (~±6px) — преходът е мек, но не размазва върху вратите
+    soft = cv2.GaussianBlur(mask, (0, 0), sigmaX=6).astype(np.float32) / 255.0
     soft3 = soft[..., None]
     blended = np.empty_like(original_rgb, dtype=np.float32)
     np.multiply(gen, soft3, out=blended)

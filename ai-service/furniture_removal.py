@@ -104,7 +104,7 @@ def detect_furniture_boxes(base64_image: str) -> Optional[List[Dict]]:
     return {"boxes": _parse(data.get("boxes", [])), "protect": _parse(data.get("protect", []))}
 
 
-def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.05, protect: Optional[List[Dict]] = None) -> np.ndarray:
+def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.03, protect: Optional[List[Dict]] = None) -> np.ndarray:
     """uint8 маска (255 = зона за заличаване) от нормализирани bounding boxes."""
     mask = np.zeros((h, w), dtype=np.uint8)
     for b in boxes:
@@ -171,6 +171,17 @@ def composite_with_original(
     h, w = original_rgb.shape[:2]
     gen = cv2.resize(generated_rgb, (w, h), interpolation=cv2.INTER_LANCZOS4)
     mask = _boxes_to_mask(boxes, w, h, protect=protect)
+
+    # Цветова калибрация: изравняваме тона на AI зоната с реалната стена
+    # около нея, за да няма разлика в цвета на стената
+    kernel = np.ones((31, 31), np.uint8)
+    ring = cv2.dilate(mask, kernel, iterations=2) - mask
+    ring_idx = ring > 0
+    if np.any(ring_idx):
+        orig_mean = original_rgb[ring_idx].mean(axis=0)
+        gen_mean = gen[ring_idx].mean(axis=0)
+        gen = np.clip(gen.astype(np.float32) + (orig_mean - gen_mean), 0, 255).astype(np.uint8)
+
     # Мека граница само в тясна ивица (~±6px) около маската
     soft = cv2.GaussianBlur(mask, (13, 13), 0).astype(np.float32) / 255.0
     soft3 = soft[..., None]

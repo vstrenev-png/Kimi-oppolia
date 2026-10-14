@@ -469,7 +469,7 @@ function debug(msg, type='info') {
   console.log('[VIS]', msg);
 }
 
-debug('Версия 2026-10-14 v3 (защитни зони за врати/прозорци)', 'ok');
+debug('Версия 2026-10-14 v4 (авто-ориентация, защитни зони, цветова калибрация)', 'ok');
 
 ['dragenter','dragover','dragleave','drop'].forEach(evt => {
   dropZone.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }, false);
@@ -575,12 +575,13 @@ async function handleFile(file) {
     const orientation = readExifOrientation(buffer);
     debug('EXIF ориентация: ' + orientation);
 
-    // Сурови пиксели без авто-EXIF (createImageBitmap 'none'); fallback: Image елемент
-    let source, srcW0, srcH0;
+    // Основен път: createImageBitmap с авто-ориентация (default = from-image)
+    let source = null;
+    let autoOriented = false;
     try {
-      source = await createImageBitmap(new Blob([buffer], { type: file.type }), { imageOrientation: 'none' });
-      srcW0 = source.width;
-      srcH0 = source.height;
+      source = await createImageBitmap(new Blob([buffer], { type: file.type }));
+      autoOriented = true;
+      debug('ориентация: автоматична (createImageBitmap)');
     } catch {
       source = await new Promise((resolve, reject) => {
         const i = new Image();
@@ -588,12 +589,15 @@ async function handleFile(file) {
         i.onerror = () => reject(new Error('decode failed'));
         i.src = URL.createObjectURL(new Blob([buffer], { type: file.type }));
       });
-      srcW0 = source.width;
-      srcH0 = source.height;
+      debug('ориентация: ръчна (EXIF transform)');
     }
 
+    const effOrientation = autoOriented ? 1 : orientation;
+    const srcW0 = source.width;
+    const srcH0 = source.height;
+
     // Ширина/височина след прилагане на ориентацията
-    const rotated = orientation >= 5 && orientation <= 8;
+    const rotated = effOrientation >= 5 && effOrientation <= 8;
     let srcW = rotated ? srcH0 : srcW0;
     let srcH = rotated ? srcW0 : srcH0;
 
@@ -611,8 +615,8 @@ async function handleFile(file) {
     const ctx = c.getContext('2d');
     const sc = w / srcW; // равномерен мащаб
     ctx.scale(sc, sc);
-    // Прилагаме EXIF трансформация ръчно — drawImage не винаги я прилага
-    switch (orientation) {
+    // Ръчна трансформация само при fallback (без createImageBitmap)
+    switch (effOrientation) {
       case 2: ctx.transform(-1, 0, 0, 1, srcW, 0); break;
       case 3: ctx.transform(-1, 0, 0, -1, srcW, srcH); break;
       case 4: ctx.transform(1, 0, 0, -1, 0, srcH); break;

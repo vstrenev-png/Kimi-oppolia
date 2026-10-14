@@ -382,7 +382,7 @@ def _prepare_for_edit(image_rgb: np.ndarray):
             right = target_w - new_w - left
             arr = cv2.copyMakeBorder(arr, 0, 0, left, right, cv2.BORDER_REPLICATE)
         pil_img = Image.fromarray(arr)
-    return pil_img, out_size, (top, left, new_w, new_h)
+    return pil_img, out_size, (top, bottom, left, right, new_w, new_h)
 
 
 def generative_remove_furniture_nomask(image_rgb: np.ndarray) -> Optional[np.ndarray]:
@@ -398,7 +398,7 @@ def generative_remove_furniture_nomask(image_rgb: np.ndarray) -> Optional[np.nda
     from openai import OpenAI
     from PIL import Image
 
-    pil_img, out_size, (top, left, new_w, new_h) = _prepare_for_edit(image_rgb)
+    pil_img, out_size, (top, bottom, left, right, new_w, new_h) = _prepare_for_edit(image_rgb)
     pad_w, pad_h = pil_img.size
 
     img_buf = _io.BytesIO()

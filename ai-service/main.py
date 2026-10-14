@@ -179,10 +179,7 @@ def remove_furniture(req: CleanRoomRequest):
             print(f"[remove-furniture] full-edit attempt {attempt + 1}: {verdict}", flush=True)
             if verdict and verdict.get("structure_ok") and not verdict.get("furniture_left"):
                 cleaned = candidate
-                # Връщаме защитените елементи (врати, прозорци, радиатори)
-                # от оригинала — 100% вярност там, където е важно
-                cleaned = restore_protect_zones(image, cleaned, protect)
-                engine = "gpt-image-1-full+verified+protect"
+                engine = "gpt-image-1-full+verified"
                 break
         except Exception as exc:
             import traceback

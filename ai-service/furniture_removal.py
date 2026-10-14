@@ -104,7 +104,7 @@ def detect_furniture_boxes(base64_image: str) -> Optional[List[Dict]]:
     return {"boxes": _parse(data.get("boxes", [])), "protect": _parse(data.get("protect", []))}
 
 
-def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.03, protect: Optional[List[Dict]] = None) -> np.ndarray:
+def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.02, protect: Optional[List[Dict]] = None) -> np.ndarray:
     """uint8 маска (255 = зона за заличаване) от нормализирани bounding boxes."""
     mask = np.zeros((h, w), dtype=np.uint8)
     for b in boxes:
@@ -114,14 +114,15 @@ def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.03, pr
         y2 = int((b["y"] + b["h"]) * h)
         pad_x = int(pad_frac * w)
         pad_y = int(pad_frac * h)
-        # Ако кутията е близо до ръба, разширяваме до самия ръб
-        if b["x"] + b["w"] > 0.80:
+        # Разширяваме до ръба само ако кутията наистина го докосва —
+        # иначе рискуваме да погълнем ъгли на стени, които трябва да останат
+        if b["x"] + b["w"] > 0.93:
             x2 = w
-        if b["y"] + b["h"] > 0.80:
+        if b["y"] + b["h"] > 0.93:
             y2 = h
-        if b["x"] < 0.20:
+        if b["x"] < 0.07:
             x1 = 0
-        if b["y"] < 0.20:
+        if b["y"] < 0.07:
             y1 = 0
         x1 = max(0, x1 - pad_x); y1 = max(0, y1 - pad_y)
         x2 = min(w, x2 + pad_x); y2 = min(h, y2 + pad_y)
@@ -277,6 +278,8 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict], protec
 
     prompt = (
         "Fill the masked areas by continuing the surrounding plain wall, floor or ceiling surface. "
+        "If a wall corner or the line where wall meets floor passes through a masked area, continue it "
+        "straight and in the correct perspective. "
         "STRICTLY FORBIDDEN: do not create windows, doors, radiators, curtains, furniture, decorations "
         "or any new features in the masked areas — only flat, empty wall/floor/ceiling matching the "
         "surrounding color, texture, perspective and lighting."

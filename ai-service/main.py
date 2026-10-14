@@ -121,6 +121,35 @@ def _covered_by_protect(box: Dict[str, Any], protect: list, threshold: float = 0
     return False
 
 
+def _merge_boxes(base: list, extra: list, iou_threshold: float = 0.2) -> list:
+    """Слива два списъка кутии: припокриващите се стават обща обхващаща кутия,
+    новите се добавят. Намалява пропуските при нестабилна детекция."""
+    merged = [dict(b) for b in base]
+    for b in extra:
+        bx1, by1, bx2, by2 = b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"]
+        b_area = b["w"] * b["h"]
+        best_i = None
+        best_iou = 0.0
+        for i, a in enumerate(merged):
+            ax1, ay1, ax2, ay2 = a["x"], a["y"], a["x"] + a["w"], a["y"] + a["h"]
+            ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+            ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+            inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+            union = a["w"] * a["h"] + b_area - inter
+            iou = inter / union if union > 0 else 0.0
+            if iou > best_iou:
+                best_iou, best_i = iou, i
+        if best_i is not None and best_iou >= iou_threshold:
+            a = merged[best_i]
+            nx1 = min(a["x"], bx1); ny1 = min(a["y"], by1)
+            nx2 = max(a["x"] + a["w"], bx2); ny2 = max(a["y"] + a["h"], by2)
+            a["x"], a["y"] = nx1, ny1
+            a["w"], a["h"] = nx2 - nx1, ny2 - ny1
+        else:
+            merged.append(dict(b))
+    return merged
+
+
 class CleanRoomRequest(BaseModel):
     image: str
 
@@ -156,6 +185,19 @@ def remove_furniture(req: CleanRoomRequest):
 
     boxes = detection["boxes"]
     protect = detection["protect"]
+
+    # Второ независимо сканиране и сливане — детекцията е нестабилна и
+    # пропуска предмети между изпълненията; union хваща повече
+    try:
+        detection_b = detect_furniture_boxes(base64_image)
+        if detection_b:
+            boxes = _merge_boxes(boxes, detection_b["boxes"])
+            for p in detection_b["protect"]:
+                if p["w"] * p["h"] <= 0.20:  # предпазва от гигантски protect кутии
+                    protect = _merge_boxes(protect, [p], iou_threshold=0.9)
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
     if not boxes:
         return CleanRoomResponse(

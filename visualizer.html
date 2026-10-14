@@ -469,6 +469,8 @@ function debug(msg, type='info') {
   console.log('[VIS]', msg);
 }
 
+debug('Версия 2026-10-14 v3 (защитни зони за врати/прозорци)', 'ok');
+
 ['dragenter','dragover','dragleave','drop'].forEach(evt => {
   dropZone.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }, false);
 });

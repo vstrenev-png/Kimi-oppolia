@@ -46,9 +46,12 @@ def detect_furniture_boxes(base64_image: str) -> Optional[List[Dict]]:
 - w, h = ширина и височина на кутията (като дял)
 Кутията трябва да покрива ЦЕЛИЯ предмет плътно — от краката до върха, но БЕЗ да застъпва врати, прозорци и радиатори.
 
+Освен това върни и "protect" списък с bounding boxes (същия формат) на всички елементи, които трябва да останат НЕПИПНАТИ: врати с касите им, прозорци, пердета, радиатори.
+
 Върни САМО валиден JSON, без Markdown и обяснения:
-{"boxes": [{"label": "tv", "x": 0.05, "y": 0.30, "w": 0.30, "h": 0.25}, ...]}
-Ако няма мебели, върни {"boxes": []}."""
+{"boxes": [{"label": "tv", "x": 0.05, "y": 0.30, "w": 0.30, "h": 0.25}, ...],
+ "protect": [{"label": "door", "x": 0.60, "y": 0.15, "w": 0.15, "h": 0.70}, ...]}
+Ако няма мебели, върни {"boxes": [], "protect": []}."""
 
     client = OpenAI(api_key=api_key)
     response = client.chat.completions.create(
@@ -79,26 +82,29 @@ def detect_furniture_boxes(base64_image: str) -> Optional[List[Dict]]:
             raw = raw[4:].strip()
 
     data = json.loads(raw)
-    boxes = data.get("boxes", [])
-    valid = []
-    for b in boxes:
-        try:
-            x = float(b["x"]); y = float(b["y"]); w = float(b["w"]); h = float(b["h"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if w <= 0 or h <= 0:
-            continue
-        valid.append({
-            "label": str(b.get("label", "item")),
-            "x": min(max(x, 0.0), 1.0),
-            "y": min(max(y, 0.0), 1.0),
-            "w": min(max(w, 0.0), 1.0),
-            "h": min(max(h, 0.0), 1.0),
-        })
-    return valid
+
+    def _parse(items):
+        valid = []
+        for b in items:
+            try:
+                x = float(b["x"]); y = float(b["y"]); w = float(b["w"]); h = float(b["h"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if w <= 0 or h <= 0:
+                continue
+            valid.append({
+                "label": str(b.get("label", "item")),
+                "x": min(max(x, 0.0), 1.0),
+                "y": min(max(y, 0.0), 1.0),
+                "w": min(max(w, 0.0), 1.0),
+                "h": min(max(h, 0.0), 1.0),
+            })
+        return valid
+
+    return {"boxes": _parse(data.get("boxes", [])), "protect": _parse(data.get("protect", []))}
 
 
-def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.05) -> np.ndarray:
+def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.05, protect: Optional[List[Dict]] = None) -> np.ndarray:
     """uint8 маска (255 = зона за заличаване) от нормализирани bounding boxes."""
     mask = np.zeros((h, w), dtype=np.uint8)
     for b in boxes:
@@ -120,13 +126,25 @@ def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.05) ->
         x1 = max(0, x1 - pad_x); y1 = max(0, y1 - pad_y)
         x2 = min(w, x2 + pad_x); y2 = min(h, y2 + pad_y)
         mask[y1:y2, x1:x2] = 255
+
+    # Изваждаме защитените зони (врати, прозорци, радиатори) от маската —
+    # те гарантирано остават непипнати
+    if protect:
+        pmask = np.zeros((h, w), dtype=np.uint8)
+        for b in protect:
+            px1 = max(0, int(b["x"] * w) - int(0.015 * w))
+            py1 = max(0, int(b["y"] * h) - int(0.015 * h))
+            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.015 * w))
+            py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.015 * h))
+            pmask[py1:py2, px1:px2] = 255
+        mask[pmask > 0] = 0
     return mask
 
 
-def inpaint_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> np.ndarray:
+def inpaint_furniture(image_rgb: np.ndarray, boxes: List[Dict], protect: Optional[List[Dict]] = None) -> np.ndarray:
     """Заличава маркираните зони чрез OpenCV inpainting."""
     h_img, w_img = image_rgb.shape[:2]
-    mask = _boxes_to_mask(boxes, w_img, h_img, pad_frac=0.02)
+    mask = _boxes_to_mask(boxes, w_img, h_img, pad_frac=0.02, protect=protect)
 
     if not np.any(mask):
         return image_rgb
@@ -143,6 +161,7 @@ def composite_with_original(
     original_rgb: np.ndarray,
     generated_rgb: np.ndarray,
     boxes: List[Dict],
+    protect: Optional[List[Dict]] = None,
 ) -> np.ndarray:
     """
     Връща оригиналните пиксели навсякъде ИЗВЪН маскираните зони.
@@ -151,7 +170,7 @@ def composite_with_original(
     """
     h, w = original_rgb.shape[:2]
     gen = cv2.resize(generated_rgb, (w, h), interpolation=cv2.INTER_LANCZOS4)
-    mask = _boxes_to_mask(boxes, w, h)
+    mask = _boxes_to_mask(boxes, w, h, protect=protect)
     # Мека граница само в тясна ивица (~±6px) около маската
     soft = cv2.GaussianBlur(mask, (13, 13), 0).astype(np.float32) / 255.0
     soft3 = soft[..., None]
@@ -173,7 +192,7 @@ def encode_image_jpeg(image_rgb: np.ndarray, quality: int = 85) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Optional[np.ndarray]:
+def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict], protect: Optional[List[Dict]] = None) -> Optional[np.ndarray]:
     """
     Генеративно премахване на мебели чрез OpenAI gpt-image-1 edit с маска.
     Връща изчистеното изображение или None при грешка.
@@ -219,7 +238,7 @@ def generative_remove_furniture(image_rgb: np.ndarray, boxes: List[Dict]) -> Opt
     pad_w, pad_h = pil_img.size
 
     # Маска: RGBA, alpha=0 = зона за редактиране; padding зоната се пази
-    mask_np = _boxes_to_mask(boxes, new_w, new_h)
+    mask_np = _boxes_to_mask(boxes, new_w, new_h, protect=protect)
     if top or bottom or left or right:
         mask_np = cv2.copyMakeBorder(mask_np, top, bottom, left, right, cv2.BORDER_CONSTANT, value=0)
     mask_arr = np.zeros((pad_h, pad_w, 4), dtype=np.uint8)

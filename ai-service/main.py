@@ -125,12 +125,15 @@ def remove_furniture(req: CleanRoomRequest):
         base64_image = encode_image_jpeg(image)
 
     try:
-        boxes = detect_furniture_boxes(base64_image)
+        detection = detect_furniture_boxes(base64_image)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI откриване на мебели неуспешно: {exc}") from exc
 
-    if boxes is None:
+    if detection is None:
         raise HTTPException(status_code=503, detail="OpenAI API ключът не е конфигуриран на сървъра.")
+
+    boxes = detection["boxes"]
+    protect = detection["protect"]
 
     if not boxes:
         return CleanRoomResponse(
@@ -143,11 +146,11 @@ def remove_furniture(req: CleanRoomRequest):
     cleaned = None
     gen_error = ""
     try:
-        generated = generative_remove_furniture(image, boxes)
+        generated = generative_remove_furniture(image, boxes, protect)
         if generated is not None:
             # AI променя само маскираните зони; всичко останало остава
             # пиксел-по-пиксел от оригиналната снимка (врати, прозорци, стени)
-            cleaned = composite_with_original(image, generated, boxes)
+            cleaned = composite_with_original(image, generated, boxes, protect)
             engine = "gpt-image-1+composite"
     except Exception as exc:
         import traceback
@@ -156,16 +159,18 @@ def remove_furniture(req: CleanRoomRequest):
         cleaned = None
 
     if cleaned is None:
-        cleaned = inpaint_furniture(image, boxes)
+        cleaned = inpaint_furniture(image, boxes, protect)
 
     # Втори pass: дочистване на пропуснати мебели върху изчистеното изображение
     if "+" in engine:
         try:
-            leftover = detect_furniture_boxes(encode_image_jpeg(cleaned))
+            detection2 = detect_furniture_boxes(encode_image_jpeg(cleaned))
+            leftover = detection2["boxes"] if detection2 else []
+            protect2 = detection2["protect"] if detection2 else []
             if leftover:
-                generated2 = generative_remove_furniture(cleaned, leftover)
+                generated2 = generative_remove_furniture(cleaned, leftover, protect2)
                 if generated2 is not None:
-                    cleaned = composite_with_original(cleaned, generated2, leftover)
+                    cleaned = composite_with_original(cleaned, generated2, leftover, protect2)
                     boxes = boxes + leftover
                     engine += ", 2pass"
         except Exception:

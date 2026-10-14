@@ -101,6 +101,23 @@ def health():
     return {"status": "ok"}
 
 
+def _covered_by_protect(box: Dict[str, Any], protect: list, threshold: float = 0.5) -> bool:
+    """True, ако кутията е покрита >threshold от защитена зона — т.е. това е
+    прекласифициран защитен елемент (врата/прозорец), а не мебел."""
+    bx1, by1 = box["x"], box["y"]
+    bx2, by2 = box["x"] + box["w"], box["y"] + box["h"]
+    b_area = box["w"] * box["h"]
+    if b_area <= 0:
+        return True
+    for p in protect:
+        ix1, iy1 = max(bx1, p["x"]), max(by1, p["y"])
+        ix2, iy2 = min(bx2, p["x"] + p["w"]), min(by2, p["y"] + p["h"])
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        if inter / b_area > threshold:
+            return True
+    return False
+
+
 class CleanRoomRequest(BaseModel):
     image: str
 
@@ -172,7 +189,12 @@ def remove_furniture(req: CleanRoomRequest):
                 detection_n = detect_furniture_boxes(encode_image_jpeg(cleaned))
                 if not detection_n:
                     break
-                leftover = detection_n["boxes"]
+                # Филтрираме „мебели", които са прекласифицирани защитени
+                # елементи (вратата сама на празна стена може да мине за шкаф)
+                leftover = [
+                    b for b in detection_n["boxes"]
+                    if not _covered_by_protect(b, protect)
+                ]
                 protect = protect + detection_n["protect"]
                 if not leftover:
                     break

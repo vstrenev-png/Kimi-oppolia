@@ -2,7 +2,7 @@ import base64
 import io
 import math
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import cv2
 import numpy as np
@@ -109,6 +109,8 @@ class CleanRoomResponse(BaseModel):
     cleaned_image: Optional[str] = None
     boxes_found: int = 0
     note: str
+    boxes: Optional[List[Dict[str, Any]]] = None
+    protect: Optional[List[Dict[str, Any]]] = None
 
 
 @app.post("/remove-furniture", response_model=CleanRoomResponse)
@@ -185,6 +187,8 @@ def remove_furniture(req: CleanRoomRequest):
         cleaned_image=encode_image_jpeg(cleaned),
         boxes_found=len(boxes),
         note=note,
+        boxes=boxes,
+        protect=protect,
     )
 
 

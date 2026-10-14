@@ -115,10 +115,11 @@ def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.02, pr
         pad_x = int(pad_frac * w)
         pad_y = int(pad_frac * h)
         # Разширяваме до ръба само ако кутията наистина го докосва —
-        # иначе рискуваме да погълнем ъгли на стени, които трябва да останат
+        # иначе рискуваме да погълнем ъгли на стени, които трябва да останат.
+        # Към пода (долен ръб) сме по-щедри — там няма ъгли за пазене.
         if b["x"] + b["w"] > 0.93:
             x2 = w
-        if b["y"] + b["h"] > 0.93:
+        if b["y"] + b["h"] > 0.88:
             y2 = h
         if b["x"] < 0.07:
             x1 = 0
@@ -183,15 +184,21 @@ def composite_with_original(
     gen = cv2.resize(generated_rgb, (w, h), interpolation=cv2.INTER_LANCZOS4)
     mask = _boxes_to_mask(boxes, w, h, protect=protect)
 
-    # Цветова калибрация: изравняваме тона на AI зоната с реалната стена
-    # около нея, за да няма разлика в цвета на стената
+    # Цветова калибрация ПО ЗОНИ: всяка свързана област от маската се
+    # изравнява по тон със собствените си околни пиксели (дясната стена
+    # може да е с друг тон от лявата)
     kernel = np.ones((31, 31), np.uint8)
-    ring = cv2.dilate(mask, kernel, iterations=2) - mask
-    ring_idx = ring > 0
-    if np.any(ring_idx):
-        orig_mean = original_rgb[ring_idx].mean(axis=0)
-        gen_mean = gen[ring_idx].mean(axis=0)
-        gen = np.clip(gen.astype(np.float32) + (orig_mean - gen_mean), 0, 255).astype(np.uint8)
+    n_labels, labels = cv2.connectedComponents(mask)
+    gen_f = gen.astype(np.float32)
+    for lbl in range(1, n_labels):
+        comp = (labels == lbl).astype(np.uint8) * 255
+        ring = (cv2.dilate(comp, kernel, iterations=2) > 0) & (labels != lbl) & (mask == 0)
+        if not np.any(ring):
+            continue
+        orig_mean = original_rgb[ring].mean(axis=0)
+        gen_mean = gen[ring].mean(axis=0)
+        gen_f[labels == lbl] += (orig_mean - gen_mean)
+    gen = np.clip(gen_f, 0, 255).astype(np.uint8)
 
     # Мека граница само в тясна ивица (~±6px) около маската
     soft = cv2.GaussianBlur(mask, (13, 13), 0).astype(np.float32) / 255.0

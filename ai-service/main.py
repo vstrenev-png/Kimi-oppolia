@@ -163,21 +163,29 @@ def remove_furniture(req: CleanRoomRequest):
     if cleaned is None:
         cleaned = inpaint_furniture(image, boxes, protect)
 
-    # Втори pass: дочистване на пропуснати мебели върху изчистеното изображение
+    # Допълнителни проверителни pass-ове (макс. 3 общо): дочистване на
+    # пропуснати мебели. Защитните зони се НАТРУПВАТ — врата, маркирана в
+    # първи pass, не може да бъде пипната в следващите.
     if "+" in engine:
-        try:
-            detection2 = detect_furniture_boxes(encode_image_jpeg(cleaned))
-            leftover = detection2["boxes"] if detection2 else []
-            protect2 = detection2["protect"] if detection2 else []
-            if leftover:
-                generated2 = generative_remove_furniture(cleaned, leftover, protect2)
-                if generated2 is not None:
-                    cleaned = composite_with_original(cleaned, generated2, leftover, protect2)
-                    boxes = boxes + leftover
-                    engine += ", 2pass"
-        except Exception:
-            import traceback
-            traceback.print_exc()
+        for pass_num in range(2, 4):
+            try:
+                detection_n = detect_furniture_boxes(encode_image_jpeg(cleaned))
+                if not detection_n:
+                    break
+                leftover = detection_n["boxes"]
+                protect = protect + detection_n["protect"]
+                if not leftover:
+                    break
+                generated_n = generative_remove_furniture(cleaned, leftover, protect)
+                if generated_n is None:
+                    break
+                cleaned = composite_with_original(cleaned, generated_n, leftover, protect)
+                boxes = boxes + leftover
+                engine += f", pass{pass_num}"
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                break
 
     labels = ", ".join(sorted({b["label"] for b in boxes}))
     note = f"Премахнати обекти ({len(boxes)}): {labels} [engine: {engine}]"

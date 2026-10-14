@@ -46,7 +46,7 @@ def detect_furniture_boxes(base64_image: str) -> Optional[List[Dict]]:
 - w, h = ширина и височина на кутията (като дял)
 Кутията трябва да покрива ЦЕЛИЯ предмет плътно — от краката до върха, но БЕЗ да застъпва врати, прозорци и радиатори.
 
-Освен това върни и "protect" списък с bounding boxes (същия формат) на всички елементи, които трябва да останат НЕПИПНАТИ: врати с касите им, прозорци, пердета, радиатори. ЗАДЪЛЖИТЕЛНО включи в protect ВСЯКА видима врата, прозорец, перде или радиатор — дори частично видим. Protect кутията трябва да покрива елемента ЦЯЛОТО, с всичките му рамки/каси.
+Освен това върни и "protect" списък с bounding boxes (същия формат) на всички елементи, които трябва да останат НЕПИПНАТИ: врати с касите им, прозорци, пердета, радиатори. ЗАДЪЛЖИТЕЛНО включи в protect ВСЯКА видима врата, прозорец, перде или радиатор — дори частично видим. Protect кутията трябва да покрива елемента ЦЯЛОТО, с всичките му рамки/каси, ПЛЮС малък запас от 2-3% около него. По-добре малко по-широка protect кутия, отколкото тясна.
 
 Върни САМО валиден JSON, без Markdown и обяснения:
 {"boxes": [{"label": "tv", "x": 0.05, "y": 0.30, "w": 0.30, "h": 0.25}, ...],
@@ -138,10 +138,10 @@ def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.02, pr
         furniture = mask > 0
         pmask = np.zeros((h, w), dtype=np.uint8)
         for b in protect:
-            px1 = max(0, int(b["x"] * w) - int(0.04 * w))
-            py1 = max(0, int(b["y"] * h) - int(0.04 * h))
-            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.04 * w))
-            py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.04 * h))
+            px1 = max(0, int(b["x"] * w) - int(0.01 * w))
+            py1 = max(0, int(b["y"] * h) - int(0.01 * h))
+            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.01 * w))
+            py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.01 * h))
             pb = np.zeros((h, w), dtype=bool)
             pb[py1:py2, px1:px2] = True
             overlap = (pb & furniture).sum() / max(pb.sum(), 1)
@@ -188,8 +188,8 @@ def composite_with_original(
     pmask = np.zeros((h, w), dtype=bool)
     if protect:
         for b in protect:
-            px1 = max(0, int(b["x"] * w) - int(0.04 * w)); py1 = max(0, int(b["y"] * h) - int(0.04 * h))
-            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.04 * w)); py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.04 * h))
+            px1 = max(0, int(b["x"] * w) - int(0.01 * w)); py1 = max(0, int(b["y"] * h) - int(0.01 * h))
+            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.01 * w)); py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.01 * h))
             pmask[py1:py2, px1:px2] = True
 
     # Цветова калибрация ПО ЗОНИ с вертикален градиент: стената е по-светла

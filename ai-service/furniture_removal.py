@@ -434,6 +434,37 @@ def generative_remove_furniture_nomask(image_rgb: np.ndarray) -> Optional[np.nda
     return generated
 
 
+def restore_protect_zones(
+    original_rgb: np.ndarray,
+    edited_rgb: np.ndarray,
+    protect: List[Dict],
+    pad_frac: float = 0.01,
+) -> np.ndarray:
+    """
+    Връща защитените елементи (врати, прозорци, радиатори) от ОРИГИНАЛА
+    върху AI-редактираното изображение — те стават пиксел-вярни,
+    докато стените/подът остават от чистия AI резултат.
+    """
+    if not protect:
+        return edited_rgb
+    h, w = original_rgb.shape[:2]
+    edited = cv2.resize(edited_rgb, (w, h), interpolation=cv2.INTER_LANCZOS4)
+    pmask = np.zeros((h, w), dtype=np.uint8)
+    for b in protect:
+        px1 = max(0, int(b["x"] * w) - int(pad_frac * w))
+        py1 = max(0, int(b["y"] * h) - int(pad_frac * h))
+        px2 = min(w, int((b["x"] + b["w"]) * w) + int(pad_frac * w))
+        py2 = min(h, int((b["y"] + b["h"]) * h) + int(pad_frac * h))
+        pmask[py1:py2, px1:px2] = 255
+    soft = cv2.GaussianBlur(pmask, (0, 0), sigmaX=6).astype(np.float32) / 255.0
+    soft3 = soft[..., None]
+    out = original_rgb.astype(np.float32) * soft3 + edited.astype(np.float32) * (1.0 - soft3)
+    out = np.clip(np.round(out), 0, 255).astype(np.uint8)
+    core = pmask > 0
+    out[core] = original_rgb[core]
+    return out
+
+
 def verify_cleaned_image(orig_b64: str, cleaned_b64: str) -> Optional[Dict]:
     """
     GPT-4o сравнява оригинала с изчистения резултат.

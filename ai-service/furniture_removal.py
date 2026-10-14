@@ -186,22 +186,29 @@ def composite_with_original(
 
     # Цветова калибрация ПО ЗОНИ: всяка свързана област от маската се
     # изравнява по тон със собствените си околни пиксели (дясната стена
-    # може да е с друг тон от лявата)
+    # може да е с друг тон от лявата). Медиана + тесен пръстен, за да не
+    # бъркат вратите/подът/другите маскирани зони в извадката.
     kernel = np.ones((31, 31), np.uint8)
+    pmask = np.zeros((h, w), dtype=bool)
+    if protect:
+        for b in protect:
+            px1 = max(0, int(b["x"] * w)); py1 = max(0, int(b["y"] * h))
+            px2 = min(w, int((b["x"] + b["w"]) * w)); py2 = min(h, int((b["y"] + b["h"]) * h))
+            pmask[py1:py2, px1:px2] = True
     n_labels, labels = cv2.connectedComponents(mask)
     gen_f = gen.astype(np.float32)
     for lbl in range(1, n_labels):
         comp = (labels == lbl).astype(np.uint8) * 255
-        ring = (cv2.dilate(comp, kernel, iterations=2) > 0) & (labels != lbl) & (mask == 0)
+        ring = (cv2.dilate(comp, kernel, iterations=1) > 0) & (mask == 0) & ~pmask
         if not np.any(ring):
             continue
-        orig_mean = original_rgb[ring].mean(axis=0)
-        gen_mean = gen[ring].mean(axis=0)
-        gen_f[labels == lbl] += (orig_mean - gen_mean)
+        orig_med = np.median(original_rgb[ring].reshape(-1, 3), axis=0)
+        gen_med = np.median(gen[ring].reshape(-1, 3), axis=0)
+        gen_f[labels == lbl] += (orig_med - gen_med)
     gen = np.clip(gen_f, 0, 255).astype(np.uint8)
 
-    # Мека граница само в тясна ивица (~±6px) около маската
-    soft = cv2.GaussianBlur(mask, (13, 13), 0).astype(np.float32) / 255.0
+    # Меко прехвърляне (~±10px) — преходът е постепенен, без твърда граница
+    soft = cv2.GaussianBlur(mask, (0, 0), sigmaX=10).astype(np.float32) / 255.0
     soft3 = soft[..., None]
     blended = np.empty_like(original_rgb, dtype=np.float32)
     np.multiply(gen, soft3, out=blended)

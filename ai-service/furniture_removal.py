@@ -424,6 +424,9 @@ def generative_remove_furniture_nomask(image_rgb: np.ndarray) -> Optional[np.nda
         "the floor, the ceiling, ALL doors with their exact frames, handles, locks and glass, windows with "
         "curtains, radiators, sockets, switches, the lighting and the perspective. "
         "Do NOT move, resize, redraw or restyle any door or window. Do NOT add anything new. "
+        "CRITICAL: if a window, curtain or radiator is only PARTIALLY visible at the edge of the photo, "
+        "keep it EXACTLY as partially visible — never expand or complete it. "
+        "Keep the ceiling-wall lines perfectly straight and make sure corners meet at exact points. "
         "Photorealistic, identical photo style and grain."
     )
 
@@ -489,22 +492,25 @@ def verify_cleaned_image(orig_b64: str, cleaned_b64: str) -> Optional[Dict]:
 
     prompt = """Сравняваш две снимки на едно и също помещение: ПЪРВАТА е оригинал, ВТОРАТА е редактирана версия, от която трябва да са премахнати всички мебели.
 
+Стъпка 1 — изброй ВСИЧКИ постоянни елементи във всяка снимка с приблизителна позиция (ляво/дясно/център): врати, прозорци, пердета, радиатори, ламперии, контакти.
+Стъпка 2 — сравни ги елемент по елемент.
+
 Отговори със САМО валиден JSON:
 {
- "structure_ok": true/false,
+ "orig_elements": ["door center", "window far-left edge", ...],
+ "new_elements": ["door center", "radiator left", ...],
+ "invented_elements": ["radiator left", ...],
+ "missing_elements": [],
+ "corners_ok": true/false,
  "furniture_left": true/false,
  "details": "кратко описание"
 }
 
-structure_ok = true САМО ако:
-- ВСИЧКИ врати (с рамки, каси, дръжки, стъкла) изглеждат идентично — същата позиция, форма, цвят, ширина на рамките, същата текстура на стъклото
-- прозорци, пердета, радиатори са идентични
-- ъглите на стените и линиите под/таван са на същите места
-- НЯМА новодобавени елементи — провери специално за нови радиатори, прозорци, врати, пердета или ламперии, които ги няма (или се виждат само частично) в оригинала
+- invented_elements: елементи във втората снимка, които ГИ НЯМА в първата (вкл. частично видими в оригинала, но разширени/довършени в редактираната — напр. перде, което в оригинала едва се вижда в ръба, а в редактираната е пълно)
+- corners_ok = false ако линиите таван/стена не са права или ъглите на стаите не се събират в една точка, или са разместени спрямо оригинала
+- furniture_left = true ако във втората снимка остава каквато и да е мебел или предмет от първата
 
-furniture_left = true ако във втората снимка остава каквато и да е мебел или предмет от първата.
-
-Бъди СТРИКТЕН: всяка видима разлика във врата, прозорец или стена означава structure_ok=false."""
+Бъди СТРИКТЕН. Върни само JSON."""
 
     client = OpenAI(api_key=api_key)
     response = client.chat.completions.create(
@@ -519,7 +525,7 @@ furniture_left = true ако във втората снимка остава к�
                 ],
             }
         ],
-        max_tokens=300,
+        max_tokens=500,
         temperature=0,
     )
     raw = response.choices[0].message.content.strip()
@@ -527,4 +533,8 @@ furniture_left = true ако във втората снимка остава к�
         raw = raw.strip("`")
         if raw.lower().startswith("json"):
             raw = raw[4:].strip()
-    return json.loads(raw)
+    data = json.loads(raw)
+    # Структурното решение се изчислява в код, не се доверяваме на модела:
+    # invented или липсващи елементи => structure не е ок
+    data["structure_ok"] = not data.get("invented_elements") and not data.get("missing_elements") and bool(data.get("corners_ok", False))
+    return data

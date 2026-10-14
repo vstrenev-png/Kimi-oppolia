@@ -210,42 +210,42 @@ def remove_furniture(req: CleanRoomRequest):
     cleaned = None
     gen_error = ""
 
-    # Стратегия 1 (основна): масков pipeline с композитинг — променяме САМО
-    # зоните с мебели; стени, врати, ъгли остават от оригиналната снимка.
-    engine = "opencv"
-    try:
-        generated = generative_remove_furniture(image, boxes, protect)
-        if generated is not None:
-            cleaned = composite_with_original(image, generated, boxes, protect)
-            engine = "gpt-image-1+composite"
-    except Exception as exc:
-        import traceback
-        traceback.print_exc()
-        gen_error = str(exc)[:200]
-        cleaned = None
-
-    if cleaned is None:
-        cleaned = inpaint_furniture(image, boxes, protect)
-
-    # Стратегия 2 (fallback): пълна AI реконструкция без маска + стриктна
-    # Vision проверка — само ако масковият pipeline не е успял.
-    if engine == "opencv":
-        for attempt in range(2):
-            try:
-                candidate = generative_remove_furniture_nomask(image)
-                if candidate is None:
-                    break
-                verdict = verify_cleaned_image(base64_image, encode_image_jpeg(candidate))
-                print(f"[remove-furniture] full-edit attempt {attempt + 1}: {verdict}", flush=True)
-                if verdict and verdict.get("structure_ok") and not verdict.get("furniture_left"):
-                    cleaned = candidate
-                    engine = "gpt-image-1-full+verified"
-                    break
-            except Exception as exc:
-                import traceback
-                traceback.print_exc()
-                gen_error = (gen_error + " | " if gen_error else "") + str(exc)[:200]
+    # Стратегия 1 (основна): пълна AI реконструкция без маска + стриктна
+    # Vision проверка (до 3 опита). Дава безшевни резултати без петна;
+    # проверката отхвърля измислени елементи и променени врати/ъгли.
+    for attempt in range(3):
+        try:
+            candidate = generative_remove_furniture_nomask(image)
+            if candidate is None:
                 break
+            verdict = verify_cleaned_image(base64_image, encode_image_jpeg(candidate))
+            print(f"[remove-furniture] full-edit attempt {attempt + 1}: {verdict}", flush=True)
+            if verdict and verdict.get("structure_ok") and not verdict.get("furniture_left"):
+                cleaned = candidate
+                engine = "gpt-image-1-full+verified"
+                break
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            gen_error = str(exc)[:200]
+            break
+
+    # Стратегия 2 (fallback): масков pipeline с композитинг
+    if cleaned is None:
+        engine = "opencv"
+        try:
+            generated = generative_remove_furniture(image, boxes, protect)
+            if generated is not None:
+                cleaned = composite_with_original(image, generated, boxes, protect)
+                engine = "gpt-image-1+composite"
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            gen_error = (gen_error + " | " if gen_error else "") + str(exc)[:200]
+            cleaned = None
+
+        if cleaned is None:
+            cleaned = inpaint_furniture(image, boxes, protect)
 
     # Допълнителни проверителни pass-ове (макс. 3 общо): дочистване на
     # пропуснати мебели. Защитните зони се НАТРУПВАТ — врата, маркирана в

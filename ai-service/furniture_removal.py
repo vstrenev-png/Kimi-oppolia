@@ -138,10 +138,10 @@ def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.02, pr
         furniture = mask > 0
         pmask = np.zeros((h, w), dtype=np.uint8)
         for b in protect:
-            px1 = max(0, int(b["x"] * w) - int(0.025 * w))
-            py1 = max(0, int(b["y"] * h) - int(0.025 * h))
-            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.025 * w))
-            py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.025 * h))
+            px1 = max(0, int(b["x"] * w) - int(0.04 * w))
+            py1 = max(0, int(b["y"] * h) - int(0.04 * h))
+            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.04 * w))
+            py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.04 * h))
             pb = np.zeros((h, w), dtype=bool)
             pb[py1:py2, px1:px2] = True
             overlap = (pb & furniture).sum() / max(pb.sum(), 1)
@@ -239,15 +239,13 @@ def composite_with_original(
 
     # Меко прехвърляне (~±10px) — преходът е постепенен, без твърда граница
     soft = cv2.GaussianBlur(mask, (0, 0), sigmaX=10).astype(np.float32) / 255.0
-    soft[pmask] = 0.0  # blend-ът НЕ пресича в защитените зони
     soft3 = soft[..., None]
     blended = np.empty_like(original_rgb, dtype=np.float32)
     np.multiply(gen, soft3, out=blended)
     blended += original_rgb.astype(np.float32) * (1.0 - soft3)
     out = np.clip(np.round(blended), 0, 255).astype(np.uint8)
-    # Гаранции: пикселите далеч от маската и ВСИЧКИ защитени пиксели,
-    # които не са умишлено маскирани, са пиксел-по-пиксел оригинални
-    unchanged = (soft < 0.01) | (pmask & (mask == 0))
+    # Гаранция: пикселите далеч от маската са пиксел-по-пиксел оригинални
+    unchanged = soft < 0.01
     out[unchanged] = original_rgb[unchanged]
     return out
 

@@ -184,38 +184,70 @@ def composite_with_original(
     gen = cv2.resize(generated_rgb, (w, h), interpolation=cv2.INTER_LANCZOS4)
     mask = _boxes_to_mask(boxes, w, h, protect=protect)
 
-    # Цветова калибрация ПО ЗОНИ: всяка свързана област от маската се
-    # изравнява по тон със собствените си околни пиксели (дясната стена
-    # може да е с друг тон от лявата). Медиана + тесен пръстен, за да не
-    # бъркат вратите/подът/другите маскирани зони в извадката.
     kernel = np.ones((31, 31), np.uint8)
     pmask = np.zeros((h, w), dtype=bool)
     if protect:
         for b in protect:
-            px1 = max(0, int(b["x"] * w)); py1 = max(0, int(b["y"] * h))
-            px2 = min(w, int((b["x"] + b["w"]) * w)); py2 = min(h, int((b["y"] + b["h"]) * h))
+            px1 = max(0, int(b["x"] * w) - int(0.04 * w)); py1 = max(0, int(b["y"] * h) - int(0.04 * h))
+            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.04 * w)); py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.04 * h))
             pmask[py1:py2, px1:px2] = True
+
+    # Цветова калибрация ПО ЗОНИ с вертикален градиент: стената е по-светла
+    # надолу, затова изчисляваме отделен offset горе и долу и интерполираме.
+    # Медиана + изключени врати/други маскирани зони от извадката.
     n_labels, labels = cv2.connectedComponents(mask)
     gen_f = gen.astype(np.float32)
+    band = 30
     for lbl in range(1, n_labels):
-        comp = (labels == lbl).astype(np.uint8) * 255
-        ring = (cv2.dilate(comp, kernel, iterations=1) > 0) & (mask == 0) & ~pmask
-        if not np.any(ring):
+        comp_mask = labels == lbl
+        ys = np.where(comp_mask.any(axis=1))[0]
+        if len(ys) == 0:
             continue
-        orig_med = np.median(original_rgb[ring].reshape(-1, 3), axis=0)
-        gen_med = np.median(gen[ring].reshape(-1, 3), axis=0)
-        gen_f[labels == lbl] += (orig_med - gen_med)
+        y0, y1 = ys.min(), ys.max()
+        comp = comp_mask.astype(np.uint8) * 255
+        dil = cv2.dilate(comp, kernel, iterations=1) > 0
+
+        def _median_diff(row_start, row_end):
+            rows = np.zeros((h, w), dtype=bool)
+            row_start = max(0, row_start); row_end = min(h, row_end)
+            if row_end <= row_start:
+                return None
+            rows[row_start:row_end, :] = True
+            region = rows & dil & (mask == 0) & ~pmask
+            if region.sum() < 50:
+                return None
+            return (np.median(original_rgb[region].reshape(-1, 3), axis=0)
+                    - np.median(gen[region].reshape(-1, 3), axis=0))
+
+        d_top = _median_diff(y0 - band, y0)
+        d_bot = _median_diff(y1 + 1, y1 + 1 + band)
+        if d_top is None and d_bot is None:
+            ring = dil & (mask == 0) & ~pmask
+            if ring.sum() < 50:
+                continue
+            d_top = d_bot = (np.median(original_rgb[ring].reshape(-1, 3), axis=0)
+                             - np.median(gen[ring].reshape(-1, 3), axis=0))
+        elif d_top is None:
+            d_top = d_bot
+        elif d_bot is None:
+            d_bot = d_top
+        row_t = np.clip((np.arange(h) - y0) / max(y1 - y0, 1), 0, 1)
+        offset = d_top[None, :] * (1 - row_t[:, None]) + d_bot[None, :] * row_t[:, None]
+        rows_of_pixels = np.where(comp_mask)[0]
+        gen_f[comp_mask] += offset[rows_of_pixels]
     gen = np.clip(gen_f, 0, 255).astype(np.uint8)
 
     # Меко прехвърляне (~±10px) — преходът е постепенен, без твърда граница
     soft = cv2.GaussianBlur(mask, (0, 0), sigmaX=10).astype(np.float32) / 255.0
+    soft[pmask] = 0.0  # blend-ът НЕ пресича в защитените зони
     soft3 = soft[..., None]
     blended = np.empty_like(original_rgb, dtype=np.float32)
     np.multiply(gen, soft3, out=blended)
     blended += original_rgb.astype(np.float32) * (1.0 - soft3)
     out = np.clip(np.round(blended), 0, 255).astype(np.uint8)
-    # Гаранция: пикселите далеч от маската са пиксел-по-пиксел оригинални
-    unchanged = soft < 0.01
+    # Гаранции: пикселите далеч от маската и ВСИЧКИ защитени пиксели,
+    # които не са умишлено маскирани, са пиксел-по-пиксел оригинални
+    unchanged = (soft < 0.01) | (pmask & (mask == 0))
     out[unchanged] = original_rgb[unchanged]
     return out
 

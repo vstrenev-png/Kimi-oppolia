@@ -137,10 +137,10 @@ def _boxes_to_mask(boxes: List[Dict], w: int, h: int, pad_frac: float = 0.02, pr
         furniture = mask > 0
         pmask = np.zeros((h, w), dtype=np.uint8)
         for b in protect:
-            px1 = max(0, int(b["x"] * w) - int(0.015 * w))
-            py1 = max(0, int(b["y"] * h) - int(0.015 * h))
-            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.015 * w))
-            py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.015 * h))
+            px1 = max(0, int(b["x"] * w) - int(0.04 * w))
+            py1 = max(0, int(b["y"] * h) - int(0.04 * h))
+            px2 = min(w, int((b["x"] + b["w"]) * w) + int(0.04 * w))
+            py2 = min(h, int((b["y"] + b["h"]) * h) + int(0.04 * h))
             pb = np.zeros((h, w), dtype=bool)
             pb[py1:py2, px1:px2] = True
             overlap = (pb & furniture).sum() / max(pb.sum(), 1)

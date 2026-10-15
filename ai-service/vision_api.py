@@ -154,13 +154,13 @@ def measure_with_vision_geometry(
 Върни САМО валиден JSON:
 {{
   "marker": {{"found": true/false, "x1": 0.0, "y1": 0.0, "x2": 0.0, "y2": 0.0, "on_floor": true/false, "at_far_wall": true/false}},
+  "door": {{"found": true/false, "x1": 0.0, "y1": 0.0, "x2": 0.0, "y2": 0.0}},
   "room": {{
     "floor_line_left_y": 0.0,
     "floor_line_right_y": 0.0,
     "left_wall_x": 0.0,
     "right_wall_x": 0.0,
-    "ceiling_line_y": 0.0,
-    "door_height_px_fraction": 0.0
+    "ceiling_line_y": 0.0
   }},
   "notes": "кратко описание"
 }}
@@ -169,7 +169,7 @@ def measure_with_vision_geometry(
 - floor_line_left_y / floor_line_right_y: y на линията, където задната стена среща пода, при левия/десния край на стената
 - left_wall_x / right_wall_x: x на лявата/дясната страна на задната стена при линията на пода
 - ceiling_line_y: y където задната стена среща тавана
-- door_height_px_fraction: ако има врата в кадъра — нейната височина като дял от височината на снимката (0.0 ако няма)
+- door: bbox на врата (с касата), ако има такава в кадъра
 - marker.at_far_wall = true ако маркерът е точно до задната стена
 
 Ако не виждаш маркер: "marker": {{"found": false}}. Ако не можеш да засечеш линиите — дай най-добрата си оценка."""
@@ -207,6 +207,7 @@ def measure_with_vision_geometry(
 
     length_cm = None
     confidence = 0.3
+    reference_note = ""
 
     if marker.get("found"):
         m_w = abs(marker["x2"] - marker["x1"]) * img_w
@@ -221,6 +222,17 @@ def measure_with_vision_geometry(
                 # Маркер по-близо до камерата — задната стена е по-далеч
                 length_cm = dist_to_marker * 1.4
                 confidence = 0.45
+            reference_note = "Мащаб от маркер."
+
+    # Врата като еталон, когато няма маркер (стандартна врата = 200 cm висока)
+    door = data.get("door") or {}
+    door_h_px = None
+    if length_cm is None and door.get("found"):
+        door_h_px = abs(door["y2"] - door["y1"]) * img_h
+        if door_h_px > 40:
+            length_cm = f_px * 200.0 / door_h_px
+            confidence = 0.45
+            reference_note = "Мащаб от врата (прието 200 cm)."
 
     # Ширина на задната стена от нейния пикселен обхват
     width_cm = None
@@ -237,16 +249,13 @@ def measure_with_vision_geometry(
         if ceil_span_px > 30 and length_cm:
             height_cm = ceil_span_px * length_cm / f_px
 
-    # Врата като еталон (стандартна врата = 200 cm):
-    # височината на стаята = 200 * (пиксели под→таван) / (пиксели на вратата)
-    if height_cm is None and room.get("door_height_px_fraction", 0) > 0.15:
-        door_px = room["door_height_px_fraction"] * img_h
+    # Височина от вратата: 200 * (пиксели под→таван) / (пиксели на вратата)
+    if height_cm is None and door_h_px and room.get("ceiling_line_y") is not None:
         floor_y = max(room.get("floor_line_left_y") or 0, room.get("floor_line_right_y") or 0)
-        if room.get("ceiling_line_y") is not None:
-            ceil_span_px = abs(floor_y - room["ceiling_line_y"]) * img_h
-            if ceil_span_px > 30 and door_px > 20:
-                height_cm = 200.0 * ceil_span_px / door_px
-                confidence = max(confidence, 0.5)
+        ceil_span_px = abs(floor_y - room["ceiling_line_y"]) * img_h
+        if ceil_span_px > 30 and door_h_px > 20:
+            height_cm = 200.0 * ceil_span_px / door_h_px
+            confidence = max(confidence, 0.5)
 
     if length_cm is None:
         return None
@@ -262,7 +271,7 @@ def measure_with_vision_geometry(
         "height_cm": round(height_cm, 1),
         "px_per_cm": round(f_px / max(length_cm, 1) , 2),
         "confidence": confidence,
-        "note": f"Геометрично измерване (FOV {fov_deg:.0f}° от EXIF). {data.get('notes', '')} Приблизително — потвърдете с рулетка.",
+        "note": f"Геометрично измерване (FOV {fov_deg:.0f}° от EXIF). {reference_note} {data.get('notes', '')} Приблизително — потвърдете с рулетка.",
         "marker_label": marker_desc,
         "debug": {"source": "vision_geometry", "fov_deg": fov_deg, "marker_found": bool(marker.get("found"))},
     }

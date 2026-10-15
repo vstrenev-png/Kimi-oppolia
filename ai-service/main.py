@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from PIL import Image
 
 from measurement import estimate_room_from_image, MARKER_SIZES_CM
-from vision_api import estimate_with_openai_vision
+from vision_api import estimate_with_openai_vision, measure_with_vision_geometry
 from furniture_removal import (
     detect_furniture_boxes,
     inpaint_furniture,
@@ -66,6 +66,26 @@ def decode_image(b64_string: str) -> np.ndarray:
         raise HTTPException(status_code=400, detail=f"Invalid image: {exc}") from exc
 
 
+def extract_fov_deg(b64_string: str, image_width_px: int) -> float:
+    """
+    Извлича реалния хоризонтален FOV от EXIF (FocalLengthIn35mmFilm).
+    FOV = 2 * atan(36mm / (2 * f35)). Fallback: 75° (типичен телефон).
+    """
+    import math
+    try:
+        img_bytes = base64.b64decode(b64_string)
+        image = Image.open(io.BytesIO(img_bytes))
+        exif = image.getexif()
+        f35 = exif.get(41989)  # FocalLengthIn35mmFilm
+        if f35:
+            f35 = float(f35)
+            if 10 <= f35 <= 200:
+                return math.degrees(2 * math.atan(36.0 / (2 * f35)))
+    except Exception:
+        pass
+    return 75.0
+
+
 def sanitize_base64(b64_string: str) -> str:
     """Премахва евентуален data URI prefix от base64 низа."""
     if "," in b64_string:
@@ -84,9 +104,19 @@ def estimate_room_dimensions(
     """
     Оценява размерите на стая.
     По подразбиране използва OpenCV + маркер.
-    use_ai=True използва OpenAI GPT-4o Vision, ако е наличен OPENAI_API_KEY.
+    use_ai=True: геометрично измерване с GPT-4o (маркер + линии на стаята в
+    пиксели, сметки в код с реален FOV от EXIF); fallback към стария AI
+    prompt и локалния алгоритъм.
     """
     if use_ai:
+        h_img, w_img = image.shape[:2]
+        fov = extract_fov_deg(base64_image, w_img)
+        geo_result = measure_with_vision_geometry(
+            base64_image, marker_type, custom_size_cm, fov, w_img, h_img
+        )
+        if geo_result is not None:
+            return geo_result
+
         ai_result = estimate_with_openai_vision(base64_image, marker_type, custom_size_cm)
         if ai_result is not None:
             ai_result["debug"] = {"source": "openai_vision"}

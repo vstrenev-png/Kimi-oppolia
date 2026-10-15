@@ -469,7 +469,7 @@ function debug(msg, type='info') {
   console.log('[VIS]', msg);
 }
 
-debug('Версия 2026-10-14 v4 (авто-ориентация, защитни зони, цветова калибрация)', 'ok');
+debug('Версия 2026-10-16 v5 (warmup ping, по-дълги retry опити)', 'ok');
 
 ['dragenter','dragover','dragleave','drop'].forEach(evt => {
   dropZone.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }, false);
@@ -521,18 +521,33 @@ viewToggle.addEventListener('click', () => {
   viewToggle.textContent = canvasWrap.classList.contains('show-photo') ? '3D сцена' : 'Снимка';
 });
 
-async function fetchWithRetry(url, options, retries = 1) {
-  try {
-    return await fetch(url, options);
-  } catch (err) {
-    if (retries > 0) {
-      debug('сървърът не отговори — опитвам отново след 5 сек...');
-      await new Promise(r => setTimeout(r, 5000));
-      return fetchWithRetry(url, options, retries - 1);
+async function fetchWithRetry(url, options, retries = 3) {
+  const delays = [5000, 15000, 30000];
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      if (attempt < retries) {
+        const wait = delays[Math.min(attempt, delays.length - 1)];
+        debug(`сървърът не отговори — опит ${attempt + 2} след ${wait / 1000} сек...`);
+        await new Promise(r => setTimeout(r, wait));
+      } else {
+        throw err;
+      }
     }
-    throw err;
   }
 }
+
+// Събуждаме backend-а още при отваряне на страницата — докато клиентът
+// снима/избира снимка, услугата в Render вече е топла
+(function warmup() {
+  const url = window.DC_CONFIG.AI_API_URL + '/health';
+  const ping = () => fetch(url, { method: 'GET', cache: 'no-store' })
+    .then(r => debug('backend: ' + (r.ok ? 'активен' : 'грешка ' + r.status), r.ok ? 'ok' : 'err'))
+    .catch(() => debug('backend: няма връзка, опитваме пак след 15 сек...', 'err'));
+  ping();
+  setTimeout(ping, 15000);
+})();
 
 function readExifOrientation(buffer) {
   const view = new DataView(buffer);
